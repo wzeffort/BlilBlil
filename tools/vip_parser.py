@@ -7,40 +7,48 @@ from bs4 import BeautifulSoup
 
 LANG = {
     "zh": {
-        "title": "🔓 VIP 播放",
-        "search_label": "搜索:",
+        "title": "VIP 播放",
+        "search_label": "搜索",
         "search_btn": "搜索",
-        "type_label": "类型:",
+        "type_label": "类型",
         "types": {"电视剧": "1", "电影": "2", "综艺": "3"},
-        "route_label": "线路:",
+        "route_label": "线路",
         "routes": [("线路一", "https://www.1717yun.com/jx/ty.php"),
                    ("线路二", "https://jx.jsonplayer.com/player/"),
                    ("线路三", "https://yparse.jn1.cc/index.php")],
-        "result_label": "结果:",
-        "play_btn": "▶ 播放",
-        "mode_label": "方式:",
+        "result_label": "结果",
+        "play_btn": "播放",
+        "mode_label": "方式",
         "modes": {"搜索": "search", "链接": "link"},
         "not_found": "未找到结果",
-        "note": "当前仅支持腾讯视频搜索"
+        "note": "当前仅支持腾讯视频搜索",
+        "tab_search": "搜索",
+        "tab_link": "链接",
     },
     "en": {
-        "title": "🔓 VIP Player",
-        "search_label": "Search:",
+        "title": "VIP Player",
+        "search_label": "Search",
         "search_btn": "Search",
-        "type_label": "Type:",
+        "type_label": "Type",
         "types": {"Drama": "1", "Movie": "2", "Show": "3"},
-        "route_label": "Route:",
+        "route_label": "Route",
         "routes": [("Route 1", "https://www.1717yun.com/jx/ty.php"),
                    ("Route 2", "https://jx.jsonplayer.com/player/"),
                    ("Route 3", "https://yparse.jn1.cc/index.php")],
-        "result_label": "Result:",
-        "play_btn": "▶ Play",
-        "mode_label": "Mode:",
+        "result_label": "Result",
+        "play_btn": "Play",
+        "mode_label": "Mode",
         "modes": {"Search": "search", "Link": "link"},
         "not_found": "No results found",
-        "note": "Currently only supports Tencent Video search"
+        "note": "Currently only supports Tencent Video search",
+        "tab_search": "Search",
+        "tab_link": "Link",
     }
 }
+
+PRIMARY = "#1a1a2e"
+ACCENT = "#e94560"
+TEXT_SECONDARY = "#6c757d"
 
 
 class VIPParserPanel(ttk.Frame):
@@ -55,50 +63,145 @@ class VIPParserPanel(ttk.Frame):
         return self.txt.get(key, key)
 
     def _build_ui(self):
-        ttk.Label(self, text=self._tr("title"), font=("", 14, "bold")).pack(anchor="w", pady=(0, 10))
+        header_frame = ttk.Frame(self)
+        header_frame.pack(fill="x", pady=(0, 8))
 
-        frame = ttk.Frame(self)
-        frame.pack(fill="x", pady=2)
-
-        ttk.Label(frame, text=self._tr("mode_label")).grid(row=0, column=0, sticky="w")
+        mode_frame = ttk.Frame(header_frame)
+        mode_frame.pack(side="left")
         self.mode_var = tk.StringVar(value="search")
-        for i, (k, v) in enumerate(self._tr("modes").items() if isinstance(self._tr("modes"), dict) else self.txt["modes"].items(), start=1):
-            ttk.Radiobutton(frame, text=k, variable=self.mode_var, value=v).grid(row=0, column=i, sticky="w")
+        for k, v in self._tr("modes").items():
+            rb = ttk.Radiobutton(
+                mode_frame, text=k, variable=self.mode_var,
+                value=v, command=self._toggle_mode
+            )
+            rb.pack(side="left", padx=(0, 8))
 
-        ttk.Label(frame, text=self._tr("search_label")).grid(row=1, column=0, sticky="w")
+        sep = ttk.Separator(self, orient="horizontal")
+        sep.pack(fill="x", pady=(0, 8))
+
+        self.search_frame = ttk.Frame(self)
+        self._build_search_ui()
+        self.search_frame.pack(fill="x")
+
+        self.link_frame = ttk.Frame(self)
+        self._build_link_ui()
+
+    def _toggle_mode(self):
+        if self.mode_var.get() == "search":
+            self.link_frame.pack_forget()
+            self.search_frame.pack(fill="x")
+        else:
+            self.search_frame.pack_forget()
+            self.link_frame.pack(fill="x")
+
+    def _build_search_ui(self):
+        row = 0
+
+        ttk.Label(self.search_frame, text=self._tr("search_label"),
+                  font=("Segoe UI", 9, "bold")).grid(row=row, column=0, sticky="w", pady=(0, 4))
+        row += 1
+
+        query_frame = ttk.Frame(self.search_frame)
+        query_frame.grid(row=row, column=0, columnspan=3, sticky="ew", pady=(0, 6))
         self.query_var = tk.StringVar()
-        ttk.Entry(frame, textvariable=self.query_var).grid(row=1, column=1, padx=5)
-        ttk.Button(frame, text=self._tr("search_btn"), command=self._do_search).grid(row=1, column=2, padx=5)
+        ttk.Entry(query_frame, textvariable=self.query_var, width=24,
+                  font=("Segoe UI", 9)).pack(side="left", fill="x", expand=True)
+        ttk.Button(query_frame, text=self._tr("search_btn"),
+                   command=self._do_search, width=8).pack(side="left", padx=(6, 0))
+        row += 1
 
-        ttk.Label(frame, text=self._tr("type_label")).grid(row=2, column=0, sticky="w")
+        ttk.Separator(self.search_frame, orient="horizontal").grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=4)
+        row += 1
+
+        ttk.Label(self.search_frame, text=self._tr("type_label"),
+                  font=("Segoe UI", 9, "bold")).grid(row=row, column=0, sticky="w", pady=(0, 4))
+        row += 1
+
+        type_frame = ttk.Frame(self.search_frame)
+        type_frame.grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 6))
         self.type_var = tk.StringVar(value="1")
-        types = self._tr("types")
-        for i, (k, v) in enumerate(types.items(), start=1):
-            ttk.Radiobutton(frame, text=k, variable=self.type_var, value=v).grid(row=2, column=i, sticky="w")
+        for k, v in self._tr("types").items():
+            ttk.Radiobutton(type_frame, text=k, variable=self.type_var,
+                            value=v).pack(side="left", padx=(0, 12))
+        row += 1
 
-        ttk.Label(frame, text=self._tr("route_label")).grid(row=3, column=0, sticky="w")
-        self.route_var = tk.StringVar()
-        routes = self._tr("routes")
-        for i, (k, v) in enumerate(routes, start=1):
-            rb = ttk.Radiobutton(frame, text=k, variable=self.route_var, value=v)
-            rb.grid(row=3, column=i, sticky="w")
-            if i == 1:
+        ttk.Label(self.search_frame, text=self._tr("route_label"),
+                  font=("Segoe UI", 9, "bold")).grid(row=row, column=0, sticky="w", pady=(0, 4))
+        row += 1
+
+        route_frame = ttk.Frame(self.search_frame)
+        route_frame.grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 8))
+        first = True
+        for k, v in self._tr("routes"):
+            rb = ttk.Radiobutton(route_frame, text=k, variable=self.route_var, value=v)
+            rb.pack(side="left", padx=(0, 8))
+            if first:
+                self.route_var = tk.StringVar(value=v)
+                rb = ttk.Radiobutton(route_frame, text=k, variable=self.route_var, value=v)
+                rb.pack(side="left", padx=(0, 8))
                 rb.invoke()
+                first = False
+        row += 1
 
-        ttk.Label(frame, text=self._tr("result_label")).grid(row=4, column=0, sticky="w")
-        self.result_combo = ttk.Combobox(frame, state="readonly", width=40)
-        self.result_combo.grid(row=4, column=1, padx=5)
-        ttk.Button(frame, text=self._tr("play_btn"), command=self._play).grid(row=4, column=2, padx=5)
+        ttk.Separator(self.search_frame, orient="horizontal").grid(
+            row=row, column=0, columnspan=3, sticky="ew", pady=4)
+        row += 1
 
-        ttk.Label(self, text=self._tr("note"), foreground="gray").pack(anchor="w", pady=(5, 0))
+        ttk.Label(self.search_frame, text=self._tr("result_label"),
+                  font=("Segoe UI", 9, "bold")).grid(row=row, column=0, sticky="w", pady=(0, 4))
+        row += 1
+
+        result_frame = ttk.Frame(self.search_frame)
+        result_frame.grid(row=row, column=0, columnspan=3, sticky="ew", pady=(0, 4))
+        self.result_combo = ttk.Combobox(result_frame, state="readonly", width=22,
+                                          font=("Segoe UI", 9))
+        self.result_combo.pack(side="left", fill="x", expand=True)
+        ttk.Button(result_frame, text=self._tr("play_btn"),
+                   command=self._play, width=8).pack(side="left", padx=(6, 0))
+
+        note_frame = ttk.Frame(self.search_frame)
+        note_frame.grid(row=row + 1, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Label(note_frame, text=self._tr("note"),
+                  foreground=TEXT_SECONDARY, font=("Segoe UI", 8)).pack(anchor="w")
+
+    def _build_link_ui(self):
+        ttk.Label(self.link_frame, text=self._tr("route_label"),
+                  font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 4))
+        routes = self._tr("routes")
+        first = True
+        route_var = tk.StringVar()
+        for k, v in routes:
+            rb = ttk.Radiobutton(self.link_frame, text=k, variable=route_var, value=v)
+            rb.pack(anchor="w", pady=1)
+            if first:
+                route_var.set(v)
+                first = False
+
+        ttk.Separator(self.link_frame, orient="horizontal").pack(fill="x", pady=8)
+
+        ttk.Label(self.link_frame, text="URL",
+                  font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 4))
+        link_frame = ttk.Frame(self.link_frame)
+        link_frame.pack(fill="x")
+        self.link_var = tk.StringVar()
+        ttk.Entry(link_frame, textvariable=self.link_var, width=24,
+                  font=("Segoe UI", 9)).pack(side="left", fill="x", expand=True)
+
+        def play_link():
+            url = self.link_var.get().strip()
+            route = route_var.get()
+            if url and route:
+                webbrowser.open(f"{route}?url={url}")
+
+        ttk.Button(link_frame, text=self._tr("play_btn"),
+                   command=play_link, width=8).pack(side="left", padx=(6, 0))
 
     def _do_search(self):
         query = self.query_var.get().strip()
         if not query:
             return
-        search_type = self.type_var.get()
-        route = self.route_var.get()
-        results = self._search_video(query, search_type, route)
+        results = self._search_video(query, self.type_var.get(), self.route_var.get())
         self.result_combo["values"] = list(results.keys())
         if results:
             self.mapping = results
@@ -107,7 +210,6 @@ class VIPParserPanel(ttk.Frame):
             showwarning("", self._tr("not_found"))
 
     def _search_video(self, query, search_type, route):
-        # Wraps original VIP视频解析(1).py search logic for Tencent Video
         txt_list = {}
         headers = {
             "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
