@@ -1,0 +1,6 @@
+{
+  "download_dir": "./downloads",
+  "ffmpeg_path": "",
+  "language": "zh",
+  "max_threads": 2
+}

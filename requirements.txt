@@ -1,0 +1,4 @@
+requests>=2.28
+beautifulsoup4>=4.11
+yt-dlp>=2023
+sv-ttk>=2.5

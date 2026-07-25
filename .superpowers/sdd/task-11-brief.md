@@ -1,3 +1,18 @@
+# Task 11: Final integration & README
+
+**Goal:** Create README.md and verify the full project works.
+
+## Steps
+
+### 1. Verify config wiring
+
+Check that `main.py` has `get_config()` method and `instance.app = self` in `_build_main_area`. The implementer in Task 2 should have added these. If not, add them.
+
+### 2. Create README.md
+
+Write bilingual README at `D:\python\mv\BlilBlil\README.md`:
+
+```markdown
 # BlilBlil — Multi-Platform Video Downloader & VIP Player
 
 [中文](#中文) | [English](#english)
@@ -75,3 +90,26 @@ pyinstaller --onefile --add-data "assets/ffmpeg;assets/ffmpeg" main.py
 ## License
 
 Apache 2.0
+```
+
+### 3. Final verification
+
+```powershell
+cd D:\python\mv\BlilBlil
+C:\Users\Lenovo\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -c "from platforms import discover_platforms; plats = discover_platforms(); print(f'Discovered {len(plats)} platforms:'); [print(f'  {p.icon} {p.name}') for p in plats]"
+```
+
+Expected:
+```
+Discovered 8 platforms:
+  🎬 B站
+  🎵 抖音
+  📺 腾讯视频
+  🎥 爱奇艺
+  🎞 优酷
+  ▶ YouTube
+  📡 CCTV
+  🔗 M3U8
+```
+
+Report to `task-11-report.md`.
