@@ -1,4 +1,5 @@
 import webbrowser
+import re
 import tkinter as tk
 from tkinter import ttk
 from tkinter.messagebox import showwarning
@@ -6,44 +7,24 @@ import requests
 from bs4 import BeautifulSoup
 
 LANG = {
-    "zh": {
-        "title": "VIP 播放",
-        "search_label": "搜索",
-        "search_btn": "搜索",
-        "type_label": "类型",
-        "types": {"电视剧": "1", "电影": "2", "综艺": "3"},
-        "route_label": "线路",
-        "routes": [("线路一", "https://www.1717yun.com/jx/ty.php"),
-                   ("线路二", "https://jx.jsonplayer.com/player/"),
-                   ("线路三", "https://yparse.jn1.cc/index.php")],
-        "result_label": "结果",
-        "play_btn": "播放",
-        "mode_label": "方式",
-        "modes": {"搜索": "search", "链接": "link"},
-        "not_found": "未找到结果",
-        "note": "当前仅支持腾讯视频搜索",
-        "tab_search": "搜索",
-        "tab_link": "链接",
-    },
-    "en": {
-        "title": "VIP Player",
-        "search_label": "Search",
-        "search_btn": "Search",
-        "type_label": "Type",
-        "types": {"Drama": "1", "Movie": "2", "Show": "3"},
-        "route_label": "Route",
-        "routes": [("Route 1", "https://www.1717yun.com/jx/ty.php"),
-                   ("Route 2", "https://jx.jsonplayer.com/player/"),
-                   ("Route 3", "https://yparse.jn1.cc/index.php")],
-        "result_label": "Result",
-        "play_btn": "Play",
-        "mode_label": "Mode",
-        "modes": {"Search": "search", "Link": "link"},
-        "not_found": "No results found",
-        "note": "Currently only supports Tencent Video search",
-        "tab_search": "Search",
-        "tab_link": "Link",
-    }
+    "title": "VIP 播放",
+    "search_label": "搜索",
+    "search_btn": "搜索",
+    "type_label": "类型",
+    "types": {"电视剧": "1", "电影": "2", "综艺": "3"},
+    "route_label": "线路",
+    "routes": [("线路一", "https://www.1717yun.com/jx/ty.php"),
+               ("线路二", "https://jx.jsonplayer.com/player/"),
+               ("线路三", "https://yparse.jn1.cc/index.php")],
+    "result_label": "结果",
+    "play_btn": "播放",
+    "mode_label": "方式",
+    "modes": {"搜索": "search", "链接": "link"},
+    "not_found": "未找到结果",
+    "note": "当前仅支持腾讯视频搜索",
+    "tab_search": "搜索",
+    "tab_link": "链接",
+    "tip": "搜索模式：输入关键词搜索腾讯视频\n链接模式：粘贴视频链接直接播放",
 }
 
 PRIMARY = "#1a1a2e"
@@ -52,15 +33,13 @@ TEXT_SECONDARY = "#6c757d"
 
 
 class VIPParserPanel(ttk.Frame):
-    def __init__(self, parent, lang="zh"):
+    def __init__(self, parent):
         super().__init__(parent)
-        self.lang = lang
-        self.txt = LANG.get(lang, LANG["zh"])
         self.mapping = {}
         self._build_ui()
 
     def _tr(self, key):
-        return self.txt.get(key, key)
+        return LANG.get(key, key)
 
     def _build_ui(self):
         header_frame = ttk.Frame(self)
@@ -132,16 +111,12 @@ class VIPParserPanel(ttk.Frame):
 
         route_frame = ttk.Frame(self.search_frame)
         route_frame.grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 8))
-        first = True
+        self.route_var = tk.StringVar()
         for k, v in self._tr("routes"):
             rb = ttk.Radiobutton(route_frame, text=k, variable=self.route_var, value=v)
             rb.pack(side="left", padx=(0, 8))
-            if first:
-                self.route_var = tk.StringVar(value=v)
-                rb = ttk.Radiobutton(route_frame, text=k, variable=self.route_var, value=v)
-                rb.pack(side="left", padx=(0, 8))
-                rb.invoke()
-                first = False
+            if not self.route_var.get():
+                self.route_var.set(v)
         row += 1
 
         ttk.Separator(self.search_frame, orient="horizontal").grid(
@@ -164,6 +139,8 @@ class VIPParserPanel(ttk.Frame):
         note_frame.grid(row=row + 1, column=0, columnspan=3, sticky="w", pady=(8, 0))
         ttk.Label(note_frame, text=self._tr("note"),
                   foreground=TEXT_SECONDARY, font=("Segoe UI", 8)).pack(anchor="w")
+        ttk.Label(note_frame, text=self._tr("tip"),
+                  foreground=TEXT_SECONDARY, font=("Segoe UI", 7)).pack(anchor="w")
 
     def _build_link_ui(self):
         ttk.Label(self.link_frame, text=self._tr("route_label"),
@@ -192,7 +169,8 @@ class VIPParserPanel(ttk.Frame):
             url = self.link_var.get().strip()
             route = route_var.get()
             if url and route:
-                webbrowser.open(f"{route}?url={url}")
+                full = f"{route}?url={url}"
+                webbrowser.open(full)
 
         ttk.Button(link_frame, text=self._tr("play_btn"),
                    command=play_link, width=8).pack(side="left", padx=(6, 0))
@@ -202,10 +180,11 @@ class VIPParserPanel(ttk.Frame):
         if not query:
             return
         results = self._search_video(query, self.type_var.get(), self.route_var.get())
-        self.result_combo["values"] = list(results.keys())
-        if results:
+        keys = list(results.keys())
+        self.result_combo["values"] = keys
+        if keys:
             self.mapping = results
-            self.result_combo.set(list(results.keys())[0])
+            self.result_combo.set(keys[0])
         else:
             showwarning("", self._tr("not_found"))
 
@@ -216,10 +195,26 @@ class VIPParserPanel(ttk.Frame):
             "referer": "https://v.qq.com/"
         }
         url = f"https://v.qq.com/x/search/?q={query}"
+
         try:
-            html = requests.get(url, headers=headers, verify=False, timeout=15).content.decode("utf-8")
+            s = requests.Session()
+            s.headers.update(headers)
+            r = s.get("https://v.qq.com/", timeout=10)
+            r = s.get(url, timeout=15)
+            html = r.text
+        except requests.exceptions.SSLError:
+            try:
+                r = requests.get(url, headers=headers, verify=False, timeout=15)
+                html = r.text
+            except Exception:
+                return txt_list
         except Exception:
-            return txt_list
+            try:
+                r = requests.get(url, headers=headers, verify=False, timeout=15)
+                html = r.text
+            except Exception:
+                return txt_list
+
         parser = BeautifulSoup(html, "html.parser")
 
         if search_type == "1":
@@ -228,10 +223,12 @@ class VIPParserPanel(ttk.Frame):
                 link = root_div.find("a")
                 if link:
                     detail = link.get("dt-params", "")
-                    name = detail.split("&")[0].split("=")[-1] if "=" in detail else query
+                    segs = detail.split("&")
+                    name = segs[0].split("=")[-1] if "=" in segs[0] else query
                     play_url = link.get("href", "")
-                    full_url = f"{route}?url={play_url}"
-                    txt_list[name] = full_url
+                    if play_url:
+                        txt_list[name] = f"{route}?url={play_url}"
+
         elif search_type == "2":
             root_div = parser.find("div", attrs={"class": "result_btn_line"})
             if root_div:
@@ -240,17 +237,27 @@ class VIPParserPanel(ttk.Frame):
                     detail = link.get("dt-params", "")
                     name = detail.split("&")[0].split("=")[-1] if "=" in detail else query
                     play_url = link.get("href", "")
-                    full_url = f"{route}?url={play_url}"
-                    txt_list[name] = full_url
+                    if play_url:
+                        txt_list[name] = f"{route}?url={play_url}"
+
         else:
             root_div = parser.find("div", attrs={"class": "result_link_list"})
             if root_div:
                 for link in root_div.find_all("a", attrs={"dt-eid": "poster"}):
                     title = link.get("title", "")
                     play_url = link.get("href", "")
-                    full_url = f"{route}?url={play_url}"
-                    if title:
-                        txt_list[title] = full_url
+                    if title and play_url:
+                        txt_list[title] = f"{route}?url={play_url}"
+
+        # fallback: try result_item_list
+        if not txt_list:
+            items = parser.find_all("a", attrs={"dt-eid": "poster"})
+            for link in items:
+                title = link.get("title", "")
+                play_url = link.get("href", "")
+                if title and play_url:
+                    txt_list[title] = f"{route}?url={play_url}"
+
         return txt_list
 
     def _play(self):

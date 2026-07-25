@@ -12,81 +12,113 @@ from core.utils import sanitize_filename, get_ffmpeg_path, ensure_dir, merge_ts
 class Tencent(BaseDownloader):
     name = "腾讯视频"
     icon = "📺"
-    description = "Tencent Video downloader"
+    description = "腾讯视频下载"
+
+    TIP = "支持：v.qq.com/x/cover/xxx、v.qq.com/x/page/xxx"
 
     def create_tab(self, parent):
         frame = ttk.Frame(parent, padding=10)
-        ttk.Label(frame, text="Tencent Video", font=("", 16, "bold")).pack(anchor="w")
-        ttk.Label(frame, text=f"{self.icon} {self.description}").pack(anchor="w", pady=(0, 10))
-        ttk.Label(frame, text="Video URL:").pack(anchor="w")
+        ttk.Label(frame, text="腾讯视频", font=("", 16, "bold")).pack(anchor="w")
+        ttk.Label(frame, text=f"{self.icon} {self.description}").pack(anchor="w", pady=(0, 4))
+        ttk.Label(frame, text="视频地址:").pack(anchor="w")
         self.url_var = tk.StringVar()
         ttk.Entry(frame, textvariable=self.url_var, width=60).pack(fill="x", pady=5)
-        ttk.Label(frame, text="Cookie:").pack(anchor="w")
-        self.cookie_var = tk.StringVar()
-        ttk.Entry(frame, textvariable=self.cookie_var, width=60).pack(fill="x", pady=5)
-        ttk.Label(frame, text="Data params (JSON):").pack(anchor="w")
-        self.data_var = tk.StringVar()
-        ttk.Entry(frame, textvariable=self.data_var, width=60).pack(fill="x", pady=5)
-        ttk.Button(frame, text="Download", command=self._on_download).pack(pady=10)
+        ttk.Label(frame, text=self.TIP, foreground="#6c757d", font=("", 8)).pack(anchor="w", pady=(0, 6))
+        ttk.Button(frame, text="下载", command=self._on_download).pack(pady=10)
         return frame
 
     def _on_download(self):
         url = self.url_var.get().strip()
         if not url:
-            messagebox.showerror("Error", "Please enter proxyhttp URL")
+            messagebox.showerror("错误", "请输入视频地址")
             return
         output_dir = os.path.join(os.getcwd(), "downloads", "tencent")
-        result = self.download(url, output_dir,
-                               cookie=self.cookie_var.get(),
-                               data=self.data_var.get())
-        if result.success:
-            messagebox.showinfo("Success", f"Downloaded: {result.file_path}")
-        else:
-            messagebox.showerror("Error", result.message)
+        self.start_download(url, output_dir)
+
+    def _parse_page(self, html):
+        """Try to extract state from page HTML."""
+        m = re.search(r"window\.__INITIAL_STATE__\s*=\s*(\{.+?\})\s*(?:;|</)", html, re.DOTALL)
+        if m:
+            return json.loads(m.group(1))
+        return None
+
+    def _find_video_from_state(self, state):
+        """Extract video URL from __INITIAL_STATE__."""
+        if not state:
+            return None, None
+        for key in ("videoInfo", "vodVideoInfo", "programInfo", "videoData"):
+            vi = state.get(key, {})
+            if not vi:
+                continue
+            streams = vi.get("streams") or vi.get("videoInfo", {}).get("streams", [])
+            if not streams:
+                continue
+            for s in streams:
+                ul = s.get("url_list") or s.get("url") or s.get("playUrl")
+                if ul:
+                    title = vi.get("title", "") or vi.get("playTitle", "tencent_video")
+                    src = ul if isinstance(ul, str) else (ul[0] if isinstance(ul, list) else None)
+                    return title, src
+        return None, None
 
     def download(self, url, output_dir, **kwargs):
         headers = {
-            "User-Agent": "Mozilla/5.0 (Linux; Android 10; Redmi K30 Pro) AppleWebKit/537.36",
-            "cookie": kwargs.get("cookie", "")
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://v.qq.com/"
         }
-        data_str = kwargs.get("data", "{}")
         try:
-            data = json.loads(data_str) if data_str else {}
-        except json.JSONDecodeError:
-            return DownloadResult(False, "Invalid JSON in data params")
+            # --- direct try ---
+            s = requests.Session()
+            s.headers.update(headers)
+            resp = s.get(url, timeout=15)
+            html = resp.text
 
-        try:
-            res = requests.get(url, headers=headers, params=data, timeout=15)
-            soup = BeautifulSoup(res.content, "html.parser")
-            info = json.loads(soup.text)
-            vinfo = json.loads(info["vinfo"])
-            m3u8 = vinfo["vl"]["vi"][0]["ul"]["m3u8"]
-            s = re.sub(r"#.*", "", m3u8)
-            links = s.split()
-            if not links:
-                return DownloadResult(False, "No ts segments found")
+            state = self._parse_page(html)
+            title, video_src = self._find_video_from_state(state)
+            if video_src:
+                ensure_dir(output_dir)
+                title = sanitize_filename(title or "tencent_video")
+                path = os.path.join(output_dir, f"{title}.mp4")
+                r = s.get(video_src, stream=True, timeout=60)
+                with open(path, "wb") as f:
+                    for chunk in r.iter_content(8192):
+                        if chunk:
+                            f.write(chunk)
+                return DownloadResult(True, "下载完成", path)
 
-            ensure_dir(output_dir)
-            filelist = os.path.join(output_dir, "filelist.txt")
-            with open(filelist, "w") as f:
-                for link in links:
-                    name = link.split("?")[0].split("/")[-1]
-                    f.write(f"file '{name}'\n")
+            # --- selenium fallback ---
+            try:
+                from core.browser import _make_driver, cookies_to_header
+                import time
 
-            for i, link in enumerate(links):
-                name = link.split("?")[0].split("/")[-1]
-                r = requests.get(link, headers=headers, stream=True, timeout=30)
-                with open(os.path.join(output_dir, name), "wb") as f:
-                    f.write(r.content)
+                driver = _make_driver(headless=False)
+                driver.get(url)
+                time.sleep(6)
 
-            output_path = os.path.join(output_dir, "output.mp4")
-            ffmpeg = get_ffmpeg_path(kwargs.get("config"))
-            if merge_ts(filelist, output_path, ffmpeg):
-                for f in os.listdir(output_dir):
-                    if f.endswith(".ts"):
-                        os.remove(os.path.join(output_dir, f))
-                os.remove(filelist)
-                return DownloadResult(True, "Download complete", output_path)
-            return DownloadResult(False, "FFmpeg merge failed")
+                state2 = driver.execute_script("return window.__INITIAL_STATE__;")
+                title2, video_src2 = self._find_video_from_state(state2)
+
+                if video_src2:
+                    cookies = driver.get_cookies()
+                    driver.quit()
+                    ck = cookies_to_header(cookies)
+                    title2 = sanitize_filename(title2 or "tencent_video")
+                    ensure_dir(output_dir)
+                    path2 = os.path.join(output_dir, f"{title2}.mp4")
+                    h = {**headers, "Cookie": ck}
+                    r2 = requests.get(video_src2, headers=h, stream=True, timeout=60)
+                    with open(path2, "wb") as f:
+                        for chunk in r2.iter_content(8192):
+                            if chunk:
+                                f.write(chunk)
+                    return DownloadResult(True, "下载完成", path2)
+
+                driver.quit()
+                return DownloadResult(False, "未能解析视频数据，请尝试使用 VIP 播放")
+            except ImportError:
+                return DownloadResult(False, "需要安装 selenium 和 Chrome 浏览器\npip install selenium")
+            except Exception as se:
+                return DownloadResult(False, f"自动化获取失败: {se}")
+
         except Exception as e:
-            return DownloadResult(False, str(e))
+            return DownloadResult(False, f"下载失败: {e}")

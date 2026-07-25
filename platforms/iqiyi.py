@@ -18,27 +18,23 @@ class IQiyi(BaseDownloader):
         frame = ttk.Frame(parent, padding=10)
         ttk.Label(frame, text="iQiyi", font=("", 16, "bold")).pack(anchor="w")
         ttk.Label(frame, text=f"{self.icon} {self.description}").pack(anchor="w", pady=(0, 10))
-        ttk.Label(frame, text="DASH API URL:").pack(anchor="w")
+        ttk.Label(frame, text="DASH API 地址:").pack(anchor="w")
         self.url_var = tk.StringVar()
         ttk.Entry(frame, textvariable=self.url_var, width=60).pack(fill="x", pady=5)
-        ttk.Label(frame, text="Webpage URL (for title):").pack(anchor="w")
+        ttk.Label(frame, text="页面地址(用于获取标题):").pack(anchor="w")
         self.page_var = tk.StringVar()
         ttk.Entry(frame, textvariable=self.page_var, width=60).pack(fill="x", pady=5)
-        ttk.Button(frame, text="Download", command=self._on_download).pack(pady=10)
+        ttk.Button(frame, text="下载", command=self._on_download).pack(pady=10)
         return frame
 
     def _on_download(self):
         dash_url = self.url_var.get().strip()
         page_url = self.page_var.get().strip()
         if not dash_url:
-            messagebox.showerror("Error", "Please enter DASH API URL")
+            messagebox.showerror("错误", "请输入 DASH API 地址")
             return
         output_dir = os.path.join(os.getcwd(), "downloads", "iqiyi")
-        result = self.download(dash_url, output_dir, page_url=page_url)
-        if result.success:
-            messagebox.showinfo("Success", f"Downloaded: {result.file_path}")
-        else:
-            messagebox.showerror("Error", result.message)
+        self.start_download(dash_url, output_dir, page_url=page_url)
 
     def download(self, url, output_dir, **kwargs):
         headers = {

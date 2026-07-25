@@ -1,4 +1,5 @@
 import abc
+import threading
 from dataclasses import dataclass
 from typing import Optional
 
@@ -25,3 +26,27 @@ class BaseDownloader(abc.ABC):
     @abc.abstractmethod
     def download(self, url: str, output_dir: str, **kwargs) -> DownloadResult:
         pass
+
+    def start_download(self, url, output_dir, **kwargs):
+        app = getattr(self, "app", None)
+        if app:
+            app.progress["mode"] = "indeterminate"
+            app.progress.start(15)
+            if "config" not in kwargs:
+                kwargs["config"] = app.get_config()
+        thread = threading.Thread(
+            target=self._download_thread,
+            args=(url, output_dir),
+            kwargs=kwargs,
+            daemon=True,
+        )
+        thread.start()
+
+    def _download_thread(self, url, output_dir, **kwargs):
+        result = self.download(url, output_dir, **kwargs)
+        app = getattr(self, "app", None)
+        if app:
+            try:
+                app.root.after(250, lambda r=result: app._on_download_done(r))
+            except Exception:
+                pass

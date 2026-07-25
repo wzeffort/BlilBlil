@@ -18,23 +18,19 @@ class CCTV(BaseDownloader):
         frame = ttk.Frame(parent, padding=10)
         ttk.Label(frame, text="CCTV", font=("", 16, "bold")).pack(anchor="w")
         ttk.Label(frame, text=f"{self.icon} {self.description}").pack(anchor="w", pady=(0, 10))
-        ttk.Label(frame, text="Video PID URL:").pack(anchor="w")
+        ttk.Label(frame, text="视频地址:").pack(anchor="w")
         self.url_var = tk.StringVar()
         ttk.Entry(frame, textvariable=self.url_var, width=60).pack(fill="x", pady=5)
-        ttk.Button(frame, text="Download", command=self._on_download).pack(pady=10)
+        ttk.Button(frame, text="下载", command=self._on_download).pack(pady=10)
         return frame
 
     def _on_download(self):
         url = self.url_var.get().strip()
         if not url:
-            messagebox.showerror("Error", "Please enter getHttpVideoInfo URL")
+            messagebox.showerror("错误", "请输入视频地址")
             return
         output_dir = os.path.join(os.getcwd(), "downloads", "cctv")
-        result = self.download(url, output_dir)
-        if result.success:
-            messagebox.showinfo("Success", f"Downloaded: {result.file_path}")
-        else:
-            messagebox.showerror("Error", result.message)
+        self.start_download(url, output_dir)
 
     def download(self, url, output_dir, **kwargs):
         try:

@@ -8,11 +8,16 @@ def sanitize_filename(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', '_', name)
 
 
-def get_ffmpeg_path(config) -> str:
-    path = config["ffmpeg_path"]
-    if path and os.path.exists(path):
-        return path
-    for candidate in ["./assets/ffmpeg/ffmpeg.exe", "ffmpeg"]:
+def get_ffmpeg_path(config=None) -> str:
+    if config:
+        path = config.get("ffmpeg_path", "")
+        if path and os.path.exists(path):
+            return path
+    for candidate in [
+        "D:/FFmpeg/bin/ffmpeg.exe",
+        "./assets/ffmpeg/ffmpeg.exe",
+        "ffmpeg",
+    ]:
         if os.path.exists(candidate) or candidate == "ffmpeg":
             return candidate
     return "ffmpeg"

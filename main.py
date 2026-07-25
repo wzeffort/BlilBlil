@@ -4,7 +4,6 @@ from core.config import Config
 from platforms import discover_platforms
 from tools.vip_parser import VIPParserPanel
 
-# deliberate palette — dark slate, warm accent, clean whitespace
 PRIMARY = "#1a1a2e"
 ACCENT = "#e94560"
 SURFACE = "#f8f9fa"
@@ -13,52 +12,25 @@ TEXT_PRIMARY = "#212529"
 TEXT_SECONDARY = "#6c757d"
 
 LANG = {
-    "zh": {
-        "title": "BlilBlil — 多平台视频下载器",
-        "subtitle": "一站式视频下载与 VIP 播放工具",
-        "download_dir": "下载目录",
-        "browse": "浏览",
-        "settings": "设置",
-        "save": "保存",
-        "cancel": "取消",
-        "progress": "进度",
-        "log": "日志",
-        "download_btn": "下载",
-        "url_label": "视频地址",
-        "ffmpeg_path": "FFmpeg 路径",
-        "max_threads": "最大线程数",
-        "language": "语言",
-        "platforms": "下载",
-        "vip_player": "VIP 播放",
-    },
-    "en": {
-        "title": "BlilBlil — Multi-Platform Video Downloader",
-        "subtitle": "All-in-one video downloader & VIP player",
-        "download_dir": "Download Dir",
-        "browse": "Browse",
-        "settings": "Settings",
-        "save": "Save",
-        "cancel": "Cancel",
-        "progress": "Progress",
-        "log": "Log",
-        "download_btn": "Download",
-        "url_label": "Video URL",
-        "ffmpeg_path": "FFmpeg Path",
-        "max_threads": "Max Threads",
-        "language": "Language",
-        "platforms": "Download",
-        "vip_player": "VIP Player",
-    }
+    "title": "BlilBlil — 多平台视频下载器",
+    "subtitle": "一站式视频下载与 VIP 播放工具",
+    "download_dir": "下载目录",
+    "browse": "浏览",
+    "progress": "进度",
+    "log": "日志",
+    "download_btn": "下载",
+    "url_label": "视频地址",
+    "max_threads": "线程数",
+    "platforms": "下载",
+    "vip_player": "VIP 播放",
 }
 
 
 class BlilBlilApp:
     def __init__(self):
         self.config = Config()
-        self.lang = self.config["language"]
-        self.txt = LANG.get(self.lang, LANG["zh"])
         self.root = tk.Tk()
-        self.root.title(self._tr("title"))
+        self.root.title(LANG["title"])
         self.root.geometry("1100x680")
         self.root.minsize(900, 550)
 
@@ -75,9 +47,6 @@ class BlilBlilApp:
     def get_config(self):
         return self.config
 
-    def _tr(self, key):
-        return self.txt.get(key, key)
-
     def _build_top_bar(self):
         top = ttk.Frame(self.root)
         top.pack(fill="x", padx=16, pady=(12, 0))
@@ -93,7 +62,7 @@ class BlilBlilApp:
         title_label.pack(side="left")
 
         subtitle_label = ttk.Label(
-            brand, text=self._tr("subtitle"),
+            brand, text=LANG["subtitle"],
             font=("Segoe UI", 10),
             foreground=TEXT_SECONDARY
         )
@@ -102,76 +71,50 @@ class BlilBlilApp:
         ttk.Separator(brand, orient="vertical").pack(side="left", fill="y", padx=16, pady=2)
 
         ttk.Label(
-            brand, text=self._tr("download_dir"),
+            brand, text=LANG["download_dir"],
             font=("Segoe UI", 9)
         ).pack(side="left")
 
         self.dir_var = tk.StringVar(value=self.config["download_dir"])
         dir_entry = ttk.Entry(
-            brand, textvariable=self.dir_var, width=36,
+            brand, textvariable=self.dir_var, width=30,
             font=("Segoe UI", 9)
         )
         dir_entry.pack(side="left", padx=6)
 
         browse_btn = ttk.Button(
-            brand, text=self._tr("browse"),
-            command=self._browse_dir, width=8
+            brand, text=LANG["browse"],
+            command=self._browse_dir, width=6
         )
-        browse_btn.pack(side="left", padx=(0, 8))
+        browse_btn.pack(side="left", padx=(0, 16))
 
-        settings_btn = ttk.Button(
-            brand, text=self._tr("settings"),
-            command=self._open_settings, width=8
+        ttk.Label(
+            brand, text=LANG["max_threads"],
+            font=("Segoe UI", 9)
+        ).pack(side="left")
+
+        self.thread_var = tk.StringVar(value=str(self.config["max_threads"]))
+        self.thread_var.trace_add("write", lambda *_: self._save_threads())
+        thread_spin = ttk.Spinbox(
+            brand, from_=1, to=32,
+            textvariable=self.thread_var, width=4,
+            font=("Segoe UI", 9)
         )
-        settings_btn.pack(side="right")
+        thread_spin.pack(side="left")
 
         ttk.Separator(self.root, orient="horizontal").pack(fill="x", padx=16, pady=(10, 0))
+
+    def _save_threads(self):
+        try:
+            self.config["max_threads"] = int(self.thread_var.get())
+        except ValueError:
+            pass
 
     def _browse_dir(self):
         path = filedialog.askdirectory()
         if path:
             self.dir_var.set(path)
             self.config["download_dir"] = path
-
-    def _open_settings(self):
-        win = tk.Toplevel(self.root)
-        win.title(self._tr("settings"))
-        win.geometry("460x240")
-        win.resizable(False, False)
-        win.transient(self.root)
-        win.grab_set()
-
-        pad = {"padx": 20, "pady": (16, 4)}
-
-        ttk.Label(win, text=self._tr("ffmpeg_path"), font=("Segoe UI", 9, "bold")).pack(anchor="w", **pad)
-        ffmpeg_var = tk.StringVar(value=self.config["ffmpeg_path"])
-        ffmpeg_entry = ttk.Entry(win, textvariable=ffmpeg_var, width=54, font=("Segoe UI", 9))
-        ffmpeg_entry.pack(padx=20, pady=(0, 8), fill="x")
-
-        ttk.Label(win, text=self._tr("max_threads"), font=("Segoe UI", 9, "bold")).pack(anchor="w", **pad)
-        thread_frame = ttk.Frame(win)
-        thread_frame.pack(fill="x", padx=20, pady=(0, 4))
-        thread_var = tk.StringVar(value=str(self.config["max_threads"]))
-        thread_spin = ttk.Spinbox(
-            thread_frame, from_=1, to=32,
-            textvariable=thread_var, width=8,
-            font=("Segoe UI", 9)
-        )
-        thread_spin.pack(side="left")
-
-        btn_frame = ttk.Frame(win)
-        btn_frame.pack(fill="x", padx=20, pady=(12, 16))
-
-        def save():
-            self.config["ffmpeg_path"] = ffmpeg_var.get()
-            try:
-                self.config["max_threads"] = int(thread_var.get())
-            except ValueError:
-                pass
-            win.destroy()
-
-        ttk.Button(btn_frame, text=self._tr("save"), command=save, width=10).pack(side="right", padx=(6, 0))
-        ttk.Button(btn_frame, text=self._tr("cancel"), command=win.destroy, width=10).pack(side="right")
 
     def _build_main_area(self):
         paned = ttk.PanedWindow(self.root, orient="horizontal")
@@ -181,7 +124,7 @@ class BlilBlilApp:
         paned.add(left_frame, weight=3)
 
         section_label = ttk.Label(
-            left_frame, text=self._tr("platforms"),
+            left_frame, text=LANG["platforms"],
             font=("Segoe UI", 11, "bold")
         )
         section_label.pack(anchor="w", pady=(0, 4))
@@ -200,7 +143,7 @@ class BlilBlilApp:
         paned.add(right_frame, weight=2)
 
         vip_header = ttk.Label(
-            right_frame, text=self._tr("vip_player"),
+            right_frame, text=LANG["vip_player"],
             font=("Segoe UI", 11, "bold")
         )
         vip_header.pack(anchor="w", pady=(0, 4))
@@ -208,7 +151,7 @@ class BlilBlilApp:
         vip_container = ttk.Frame(right_frame, relief="solid", borderwidth=1)
         vip_container.pack(fill="both", expand=True)
 
-        self.vip_panel = VIPParserPanel(vip_container, lang=self.lang)
+        self.vip_panel = VIPParserPanel(vip_container)
         self.vip_panel.pack(fill="both", expand=True, padx=8, pady=8)
 
     def _build_bottom_bar(self):
@@ -218,7 +161,7 @@ class BlilBlilApp:
         self.progress = ttk.Progressbar(bottom, mode="determinate")
         self.progress.pack(fill="x", pady=(0, 4))
 
-        log_frame = ttk.LabelFrame(bottom, text=self._tr("log"), padding=(4, 2))
+        log_frame = ttk.LabelFrame(bottom, text=LANG["log"], padding=(4, 2))
         log_frame.pack(fill="both", expand=True)
 
         self.log_text = tk.Text(
@@ -234,6 +177,17 @@ class BlilBlilApp:
         self.log_text.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
         self.log_text.pack(fill="both", expand=True)
+
+    def _on_download_done(self, result):
+        self.progress.stop()
+        self.progress["mode"] = "determinate"
+        self.progress["value"] = 100
+        if result.success:
+            import tkinter.messagebox as mb
+            mb.showinfo("成功", f"下载完成:\n{result.file_path}")
+        else:
+            import tkinter.messagebox as mb
+            mb.showerror("错误", result.message)
 
     def log(self, message: str, tag: str = "info"):
         self.log_text.config(state="normal")
