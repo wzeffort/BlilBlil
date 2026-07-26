@@ -32,7 +32,7 @@ class Youku(BaseDownloader):
         if not url:
             messagebox.showerror("错误", "请输入视频地址")
             return
-        output_dir = os.path.join(os.getcwd(), "downloads", "youku")
+        output_dir = self.get_output_dir("youku")
         self.start_download(url, output_dir)
 
     def _parse_state(self, html):

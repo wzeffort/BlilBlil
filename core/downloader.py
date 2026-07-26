@@ -1,4 +1,5 @@
 import abc
+import os
 import threading
 from dataclasses import dataclass
 from typing import Optional
@@ -42,8 +43,22 @@ class BaseDownloader(abc.ABC):
         )
         thread.start()
 
+    def get_output_dir(self, platform_name: str) -> str:
+        app = getattr(self, "app", None)
+        if app:
+            try:
+                base_dir = app.get_config()["download_dir"]
+                if base_dir:
+                    return os.path.join(base_dir, platform_name)
+            except (KeyError, TypeError, AttributeError):
+                pass
+        return os.path.join(os.getcwd(), "downloads", platform_name)
+
     def _download_thread(self, url, output_dir, **kwargs):
-        result = self.download(url, output_dir, **kwargs)
+        try:
+            result = self.download(url, output_dir, **kwargs)
+        except Exception as exc:
+            result = DownloadResult(False, f"下载失败: {exc}")
         app = getattr(self, "app", None)
         if app:
             try:

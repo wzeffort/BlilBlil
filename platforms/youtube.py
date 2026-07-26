@@ -41,7 +41,7 @@ class YouTube(BaseDownloader):
         if not url:
             messagebox.showerror("错误", "请输入视频地址")
             return
-        output_dir = os.path.join(os.getcwd(), "downloads", "youtube")
+        output_dir = self.get_output_dir("youtube")
         self.start_download(url, output_dir, format_id=self.fmt_var.get())
 
     def download(self, url, output_dir, **kwargs):
