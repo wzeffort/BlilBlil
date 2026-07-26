@@ -32,7 +32,7 @@ class Tencent(BaseDownloader):
         if not url:
             messagebox.showerror("错误", "请输入视频地址")
             return
-        output_dir = os.path.join(os.getcwd(), "downloads", "tencent")
+        output_dir = self.get_output_dir("tencent")
         self.start_download(url, output_dir)
 
     def _parse_page(self, html):

@@ -1,12 +1,8 @@
-import json
 import os
-import re
 import tkinter as tk
 from tkinter import ttk, messagebox
-import requests
-from bs4 import BeautifulSoup
 from core.downloader import BaseDownloader, DownloadResult
-from core.utils import sanitize_filename, get_ffmpeg_path, merge_audio_video, ensure_dir
+from core.utils import get_ffmpeg_path, ensure_dir
 
 
 class Bilibili(BaseDownloader):
@@ -33,51 +29,41 @@ class Bilibili(BaseDownloader):
         self.start_download(url, output_dir)
 
     def _get_output_dir(self):
-        return os.path.join(os.getcwd(), "downloads", "bilibili")
+        return self.get_output_dir("bilibili")
 
     def download(self, url, output_dir, **kwargs):
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ",
-            "Referer": "https://www.bilibili.com",
-        }
         try:
-            res1 = requests.get(url, headers=headers, stream=True)
-            soup = BeautifulSoup(res1.text, "html.parser")
+            ffmpeg = get_ffmpeg_path(kwargs.get("config"))
+            if not ffmpeg:
+                return DownloadResult(
+                    False,
+                    "未找到 FFmpeg，无法合并 B 站音视频。"
+                    "\n请将 ffmpeg.exe 放到 ffmpeg 文件夹，或在配置中指定路径。",
+                )
 
-            scripts = soup.find_all("script")
-            playinfo = None
-            for script in scripts:
-                if "window.__playinfo__" in script.text:
-                    json_str = script.text.split("=", 1)[1].strip()
-                    json_str = json_str.rsplit(";", 1)[0]
-                    playinfo = json.loads(json_str)
-                    break
-
-            if not playinfo:
-                return DownloadResult(False, "未找到播放信息，请确认链接有效")
-
-            audio_url = playinfo["data"]["dash"]["audio"][0]["base_url"]
-            video_url = playinfo["data"]["dash"]["video"][0]["base_url"]
-
-            title_tag = soup.find("h1", class_="video-title")
-            title = sanitize_filename(title_tag.text if title_tag else "bilibili_video")
-
-            audio_data = requests.get(audio_url, headers=headers).content
-            video_data = requests.get(video_url, headers=headers).content
+            from yt_dlp import YoutubeDL
 
             ensure_dir(output_dir)
-            audio_path = os.path.join(output_dir, "audio.m4s")
-            video_path = os.path.join(output_dir, "video.m4s")
-            output_path = os.path.join(output_dir, f"{title}.mp4")
+            options = {
+                "outtmpl": os.path.join(output_dir, "%(title)s [%(id)s].%(ext)s"),
+                "noplaylist": True,
+                "nocheckcertificate": True,
+                "format": "bv*+ba/b",
+                "ffmpeg_location": ffmpeg,
+                "merge_output_format": "mp4",
+            }
 
-            with open(audio_path, "wb") as f:
-                f.write(audio_data)
-            with open(video_path, "wb") as f:
-                f.write(video_data)
-
-            ffmpeg = get_ffmpeg_path(kwargs.get("config"))
-            if merge_audio_video(audio_path, video_path, output_path, ffmpeg):
+            with YoutubeDL(options) as ydl:
+                info = ydl.extract_info(url, download=True)
+                output_path = ydl.prepare_filename(info)
+                merged_path = os.path.splitext(output_path)[0] + ".mp4"
+                if os.path.exists(merged_path):
+                    output_path = merged_path
                 return DownloadResult(True, "下载完成", output_path)
-            return DownloadResult(False, "FFmpeg 合并失败")
+        except ImportError:
+            return DownloadResult(
+                False,
+                "缺少 yt-dlp，请执行：pip install -r requirements.txt",
+            )
         except Exception as e:
             return DownloadResult(False, f"下载失败: {e}")

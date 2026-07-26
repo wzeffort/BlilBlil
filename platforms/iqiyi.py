@@ -33,7 +33,7 @@ class IQiyi(BaseDownloader):
         if not dash_url:
             messagebox.showerror("错误", "请输入 DASH API 地址")
             return
-        output_dir = os.path.join(os.getcwd(), "downloads", "iqiyi")
+        output_dir = self.get_output_dir("iqiyi")
         self.start_download(dash_url, output_dir, page_url=page_url)
 
     def download(self, url, output_dir, **kwargs):

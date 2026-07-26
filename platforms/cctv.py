@@ -29,7 +29,7 @@ class CCTV(BaseDownloader):
         if not url:
             messagebox.showerror("错误", "请输入视频地址")
             return
-        output_dir = os.path.join(os.getcwd(), "downloads", "cctv")
+        output_dir = self.get_output_dir("cctv")
         self.start_download(url, output_dir)
 
     def download(self, url, output_dir, **kwargs):

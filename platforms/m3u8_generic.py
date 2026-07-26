@@ -26,7 +26,7 @@ class M3U8Generic(BaseDownloader):
         if not url:
             messagebox.showerror("错误", "请输入 M3U8 地址")
             return
-        output_dir = os.path.join(os.getcwd(), "downloads", "m3u8")
+        output_dir = self.get_output_dir("m3u8")
         self.start_download(url, output_dir)
 
     def download(self, url, output_dir, **kwargs):

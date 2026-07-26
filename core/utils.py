@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import subprocess
 from typing import Optional
 
@@ -8,19 +9,22 @@ def sanitize_filename(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', '_', name)
 
 
-def get_ffmpeg_path(config=None) -> str:
+def get_ffmpeg_path(config=None) -> Optional[str]:
     if config:
-        path = config.get("ffmpeg_path", "")
-        if path and os.path.exists(path):
+        try:
+            path = config["ffmpeg_path"]
+        except (KeyError, TypeError):
+            path = ""
+        if path and os.path.isfile(path):
             return path
     for candidate in [
-        "D:/FFmpeg/bin/ffmpeg.exe",
+        os.path.join(".", "ffmpeg", "ffmpeg.exe"),
         "./assets/ffmpeg/ffmpeg.exe",
-        "ffmpeg",
+        "D:/FFmpeg/bin/ffmpeg.exe",
     ]:
-        if os.path.exists(candidate) or candidate == "ffmpeg":
+        if os.path.isfile(candidate):
             return candidate
-    return "ffmpeg"
+    return shutil.which("ffmpeg")
 
 
 def merge_audio_video(audio: str, video: str, output: str, ffmpeg: str) -> bool:
