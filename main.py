@@ -41,8 +41,8 @@ class BlilBlilApp:
             pass
 
         self._build_top_bar()
-        self._build_main_area()
         self._build_bottom_bar()
+        self._build_main_area()
 
     def get_config(self):
         return self.config
@@ -156,10 +156,17 @@ class BlilBlilApp:
 
     def _build_bottom_bar(self):
         bottom = ttk.Frame(self.root)
-        bottom.pack(fill="x", padx=16, pady=(0, 8))
+        bottom.pack(side="bottom", fill="x", padx=16, pady=(0, 8))
 
-        self.progress = ttk.Progressbar(bottom, mode="determinate")
-        self.progress.pack(fill="x", pady=(0, 4))
+        progress_row = ttk.Frame(bottom)
+        progress_row.pack(fill="x", pady=(0, 6))
+        ttk.Label(
+            progress_row,
+            text="下载进度",
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=(0, 8))
+        self.progress = ttk.Progressbar(progress_row, mode="determinate")
+        self.progress.pack(side="left", fill="x", expand=True)
 
         log_frame = ttk.LabelFrame(bottom, text=LANG["log"], padding=(4, 2))
         log_frame.pack(fill="both", expand=True)
@@ -172,6 +179,7 @@ class BlilBlilApp:
         self.log_text.tag_config("info", foreground=TEXT_SECONDARY)
         self.log_text.tag_config("success", foreground="#2d8a4e")
         self.log_text.tag_config("error", foreground=ACCENT)
+        self.log_text.tag_config("warning", foreground="#b26a00")
 
         scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scrollbar.set)
@@ -181,7 +189,10 @@ class BlilBlilApp:
     def _on_download_done(self, result):
         self.progress.stop()
         self.progress["mode"] = "determinate"
-        self.progress["value"] = 100
+        self.progress["value"] = 100 if result.success else 0
+        if result.cancelled:
+            self.log("下载已停止", "info")
+            return
         if result.success:
             import tkinter.messagebox as mb
             mb.showinfo("成功", f"下载完成:\n{result.file_path}")

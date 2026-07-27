@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
 from core.downloader import BaseDownloader, DownloadResult
+from core.instruction_panel import InstructionPanel
 from core.utils import ensure_dir, sanitize_filename
 
 
@@ -35,6 +36,15 @@ class Douyin(BaseDownloader):
         self.status_var = tk.StringVar(value="就绪")
         ttk.Label(frame, textvariable=self.status_var, font=("", 9)).pack(anchor="w", pady=(4, 0))
         ttk.Button(frame, text="下载", command=self._on_download).pack(pady=8)
+        InstructionPanel(
+            frame,
+            steps=[
+                "打开抖音视频详情页。",
+                "复制浏览器地址栏中的完整链接，也支持分享短链接。",
+                "将链接粘贴到上方输入框，点击下载；解析会在后台完成。",
+            ],
+            image_name="抖音下载说明.png",
+        ).pack(fill="both", expand=True, pady=(8, 0))
         return frame
 
     @staticmethod
@@ -171,17 +181,8 @@ class Douyin(BaseDownloader):
         driver = None
         try:
             from core.browser import cookies_to_header
-            from selenium import webdriver
-            from selenium.webdriver.chrome.options import Options
 
-            opts = Options()
-            opts.add_experimental_option("excludeSwitches", ["enable-automation"])
-            opts.add_experimental_option("useAutomationExtension", False)
-            opts.add_argument(
-                "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
-            )
-            driver = webdriver.Chrome(options=opts)
+            driver = self.create_background_driver()
             driver.get(video_url)
             self._set_status("等待页面加载...")
             time.sleep(6)

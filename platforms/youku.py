@@ -24,7 +24,10 @@ class Youku(BaseDownloader):
         self.url_var = tk.StringVar()
         ttk.Entry(frame, textvariable=self.url_var, width=60).pack(fill="x", pady=5)
         ttk.Label(frame, text=self.TIP, foreground="#6c757d", font=("", 8)).pack(anchor="w", pady=(0, 6))
-        ttk.Button(frame, text="下载", command=self._on_download).pack(pady=10)
+        self.create_download_controls(
+            frame, self._on_download
+        ).pack(anchor="center", pady=10)
+        self.create_status_label(frame)
         return frame
 
     def _on_download(self):
@@ -78,11 +81,10 @@ class Youku(BaseDownloader):
                     h["Cookie"] = cookie_str
 
                 if len(seg_urls) == 1:
+                    self._set_status("正在下载...")
                     r = requests.get(seg_urls[0], headers=h, stream=True, timeout=60)
-                    with open(output_path, "wb") as f:
-                        for chunk in r.iter_content(8192):
-                            if chunk:
-                                f.write(chunk)
+                    r.raise_for_status()
+                    self.download_response(r, output_path)
                     return DownloadResult(True, "下载完成", output_path)
 
                 filelist = os.path.join(output_dir, "filelist.txt")
@@ -93,15 +95,21 @@ class Youku(BaseDownloader):
                             name = f"seg_{seg_urls.index(cdn)}.ts"
                         f.write(f"file '{name}'\n")
 
+                self._set_status("正在下载视频分片...")
                 for cdn in seg_urls:
                     name = cdn.split("/")[-1].split("?")[0]
                     if not name:
                         name = f"seg_{seg_urls.index(cdn)}.ts"
                     r = requests.get(cdn, headers=h, stream=True, timeout=60)
-                    with open(os.path.join(output_dir, name), "wb") as f:
-                        f.write(r.content)
+                    r.raise_for_status()
+                    self.download_response(
+                        r, os.path.join(output_dir, name)
+                    )
 
                 ffmpeg = get_ffmpeg_path(kwargs.get("config"))
+                if not ffmpeg:
+                    return DownloadResult(False, "未找到 FFmpeg，无法合并视频")
+                self._set_status("正在合并视频...")
                 if merge_ts(filelist, output_path, ffmpeg):
                     for f in os.listdir(output_dir):
                         if f.endswith(".ts"):
@@ -111,6 +119,7 @@ class Youku(BaseDownloader):
                 return DownloadResult(False, "FFmpeg 合并失败")
 
             # --- direct try ---
+            self._set_status("正在解析优酷视频...")
             s = requests.Session()
             s.headers.update(headers)
             resp = s.get(url, timeout=15)
@@ -121,10 +130,11 @@ class Youku(BaseDownloader):
 
             # --- selenium fallback ---
             try:
-                from core.browser import _make_driver, cookies_to_header
+                from core.browser import cookies_to_header
                 import time
 
-                driver = _make_driver(headless=False)
+                self._set_status("正在后台解析优酷页面...")
+                driver = self.create_background_driver()
                 driver.get(url)
                 time.sleep(6)
 
@@ -140,7 +150,9 @@ class Youku(BaseDownloader):
             except ImportError:
                 return DownloadResult(False, "需要安装 selenium 和 Chrome 浏览器\npip install selenium")
             except Exception as se:
+                self._raise_if_cancelled()
                 return DownloadResult(False, f"自动化获取失败: {se}")
 
         except Exception as e:
+            self._raise_if_cancelled()
             return DownloadResult(False, f"下载失败: {e}")
