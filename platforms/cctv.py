@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import time
 import tkinter as tk
 from tkinter import ttk, messagebox
 import requests
@@ -21,7 +22,10 @@ class CCTV(BaseDownloader):
         ttk.Label(frame, text="视频地址:").pack(anchor="w")
         self.url_var = tk.StringVar()
         ttk.Entry(frame, textvariable=self.url_var, width=60).pack(fill="x", pady=5)
-        ttk.Button(frame, text="下载", command=self._on_download).pack(pady=10)
+        self.create_download_controls(
+            frame, self._on_download
+        ).pack(anchor="center", pady=10)
+        self.create_status_label(frame)
         return frame
 
     def _on_download(self):
@@ -34,17 +38,33 @@ class CCTV(BaseDownloader):
 
     def download(self, url, output_dir, **kwargs):
         try:
+            self._set_status("正在解析 CCTV 视频...")
             res = requests.get(url, timeout=15)
             data = json.loads(res.text)
             hls_url = data["hls_url"]
 
+            self._set_status("正在下载并合并...")
             ensure_dir(output_dir)
             output_path = os.path.join(output_dir, "cctv_video.mp4")
             ffmpeg = get_ffmpeg_path(kwargs.get("config"))
+            if not ffmpeg:
+                return DownloadResult(False, "未找到 FFmpeg")
             cmd = [ffmpeg, "-i", hls_url, "-c", "copy", output_path]
-            result = subprocess.run(cmd, capture_output=True, timeout=300)
-            if result.returncode == 0:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            while process.poll() is None:
+                if self._get_cancel_event().is_set():
+                    process.terminate()
+                    process.wait(timeout=5)
+                    self._raise_if_cancelled()
+                time.sleep(0.2)
+            _, stderr = process.communicate()
+            if process.returncode == 0:
                 return DownloadResult(True, "Download complete", output_path)
-            return DownloadResult(False, result.stderr.decode())
+            return DownloadResult(False, stderr.decode(errors="replace"))
         except Exception as e:
+            self._raise_if_cancelled()
             return DownloadResult(False, str(e))

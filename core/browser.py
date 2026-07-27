@@ -7,12 +7,15 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 
-def _make_driver(headless=True):
+def _make_driver(headless=True, performance_logging=False):
     opts = Options()
     if headless:
         opts.add_argument("--headless=new")
+    if performance_logging:
+        opts.set_capability("goog:loggingPrefs", {"performance": "ALL"})
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--autoplay-policy=no-user-gesture-required")
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option("useAutomationExtension", False)

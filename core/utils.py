@@ -2,11 +2,18 @@ import os
 import re
 import shutil
 import subprocess
+import math
 from typing import Optional
 
 
 def sanitize_filename(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', '_', name)
+
+
+def image_subsample_factor(width: int, max_width: int) -> int:
+    if width <= 0 or max_width <= 0:
+        return 1
+    return max(1, math.ceil(width / max_width))
 
 
 def get_ffmpeg_path(config=None) -> Optional[str]:
