@@ -1,0 +1,5 @@
+version: v0.6.0-beta
+binary-version: 0.6.0+df70f0b3da0c630bd413bf617e758051f6b64757
+asset: N_m3u8DL-RE_v0.6.0-beta_win-x64_20260629.zip
+source: https://github.com/nilaoda/N_m3u8DL-RE/releases/tag/v0.6.0-beta
+sha256: 35E7C16983F0315BBA2A3F37DC392FDFA074BE614C8EFFB642B78376B18BA272

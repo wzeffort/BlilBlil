@@ -11,6 +11,7 @@ def _make_driver(headless=True, performance_logging=False):
     opts = Options()
     if headless:
         opts.add_argument("--headless=new")
+        opts.add_argument("--mute-audio")
     if performance_logging:
         opts.set_capability("goog:loggingPrefs", {"performance": "ALL"})
     opts.add_argument("--no-sandbox")

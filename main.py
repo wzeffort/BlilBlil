@@ -13,7 +13,7 @@ TEXT_SECONDARY = "#6c757d"
 
 LANG = {
     "title": "BlilBlil — 多平台视频下载器",
-    "subtitle": "一站式视频下载与 VIP 播放工具",
+    "subtitle": "视频下载与播放工具",
     "download_dir": "下载目录",
     "browse": "浏览",
     "progress": "进度",
@@ -22,7 +22,7 @@ LANG = {
     "url_label": "视频地址",
     "max_threads": "线程数",
     "platforms": "下载",
-    "vip_player": "VIP 播放",
+    "vip_player": "VIP 视频免费播放",
 }
 
 

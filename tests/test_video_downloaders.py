@@ -2,6 +2,7 @@ import os
 import json
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from unittest.mock import Mock, patch
@@ -17,6 +18,8 @@ from platforms.tencent import Tencent
 class _FakeYoutubeDL:
     last_options = None
     info = None
+    download_flags = []
+    extracted_urls = []
 
     def __init__(self, options):
         type(self).last_options = options
@@ -29,6 +32,8 @@ class _FakeYoutubeDL:
 
     def extract_info(self, url, download):
         self.extracted_url = url
+        type(self).download_flags.append(download)
+        type(self).extracted_urls.append(url)
         return dict(type(self).info)
 
     def prepare_filename(self, info):
@@ -265,8 +270,1184 @@ class CoreDownloaderTests(unittest.TestCase):
         downloader.app.log.assert_called()
 
 
+class ConfigTests(unittest.TestCase):
+    def test_older_config_receives_n_m3u8dl_default(self):
+        from core.config import Config
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "config.json")
+            with open(config_path, "w", encoding="utf-8") as config_file:
+                json.dump(
+                    {
+                        "download_dir": "D:/Videos",
+                        "max_threads": 6,
+                    },
+                    config_file,
+                )
+
+            config = Config(config_path)
+
+        self.assertEqual("", config["n_m3u8dl_path"])
+        self.assertEqual("D:/Videos", config["download_dir"])
+        self.assertEqual(6, config["max_threads"])
+
+
+class NM3U8DLAdapterTests(unittest.TestCase):
+    def test_executable_lookup_accepts_app_config(self):
+        from core.config import Config
+        from core.n_m3u8dl import find_n_m3u8dl
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            executable = os.path.join(temp_dir, "N_m3u8DL-RE.exe")
+            with open(executable, "wb") as file:
+                file.write(b"test fixture")
+            config = Config(os.path.join(temp_dir, "config.json"))
+            config["n_m3u8dl_path"] = executable
+            self.assertEqual(executable, find_n_m3u8dl(config))
+
+    def test_command_uses_threads_from_app_config(self):
+        from core.config import Config
+        from core.n_m3u8dl import build_n_m3u8dl_command
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = Config(os.path.join(temp_dir, "config.json"))
+            config["max_threads"] = 6
+            command = build_n_m3u8dl_command(
+                "N_m3u8DL-RE.exe", "https://cdn.example/video.m3u8",
+                {}, temp_dir, "video", config,
+            )
+            self.assertEqual("6", command[command.index("--thread-count") + 1])
+
+    def test_configured_executable_has_priority(self):
+        from core.n_m3u8dl import find_n_m3u8dl
+
+        configured = os.path.join("D:\\", "Tools", "N_m3u8DL-RE.exe")
+        with (
+            patch("core.n_m3u8dl.os.path.isfile", return_value=True),
+            patch("core.n_m3u8dl.shutil.which") as which,
+        ):
+            result = find_n_m3u8dl({"n_m3u8dl_path": configured})
+
+        self.assertEqual(configured, result)
+        which.assert_not_called()
+
+    def test_command_clamps_threads_and_passes_media_context(self):
+        from core.n_m3u8dl import build_n_m3u8dl_command
+
+        command = build_n_m3u8dl_command(
+            "N_m3u8DL-RE.exe",
+            "https://cdn.example/video.m3u8?token=signed",
+            {
+                "User-Agent": "Browser UA",
+                "Referer": "https://v.qq.com/",
+                "Cookie": "video_guid=session",
+            },
+            os.path.join("downloads", "tencent"),
+            "目标视频 [shd-0]",
+            {"max_threads": 99},
+            os.path.join("ffmpeg", "ffmpeg.exe"),
+        )
+
+        self.assertEqual("N_m3u8DL-RE.exe", command[0])
+        self.assertEqual(
+            "https://cdn.example/video.m3u8?token=signed",
+            command[1],
+        )
+        thread_index = command.index("--thread-count")
+        self.assertEqual("16", command[thread_index + 1])
+        output_index = command.index("--save-dir")
+        self.assertEqual(
+            os.path.abspath(os.path.join("downloads", "tencent")),
+            command[output_index + 1],
+        )
+        self.assertIn("User-Agent: Browser UA", command)
+        self.assertIn("Referer: https://v.qq.com/", command)
+        self.assertIn("Cookie: video_guid=session", command)
+        self.assertIn("--append-url-params", command)
+        ffmpeg_index = command.index("--ffmpeg-binary-path")
+        self.assertEqual(
+            os.path.abspath(os.path.join("ffmpeg", "ffmpeg.exe")),
+            command[ffmpeg_index + 1],
+        )
+        self.assertNotIn("shell=True", command)
+
+    def test_runner_returns_new_media_file(self):
+        from core.n_m3u8dl import run_n_m3u8dl
+
+        with tempfile.TemporaryDirectory() as output_dir:
+            expected = os.path.join(output_dir, "目标视频.mp4")
+
+            class CompletedProcess:
+                returncode = 0
+
+                def poll(self):
+                    return 0
+
+            def start_process(*_args, **_kwargs):
+                with open(expected, "wb") as output:
+                    output.write(b"video")
+                return CompletedProcess()
+
+            with patch(
+                "core.n_m3u8dl.subprocess.Popen",
+                side_effect=start_process,
+            ):
+                result = run_n_m3u8dl(
+                    ["N_m3u8DL-RE.exe", "signed-url"],
+                    output_dir,
+                    "目标视频",
+                    lambda: None,
+                )
+
+        self.assertEqual(expected, result)
+
+    def test_runner_terminates_child_when_cancelled(self):
+        from core.downloader import DownloadCancelled
+        from core.n_m3u8dl import run_n_m3u8dl
+
+        process = Mock()
+        process.poll.return_value = None
+        process.wait.return_value = 0
+
+        def cancel():
+            raise DownloadCancelled("下载已停止")
+
+        with (
+            tempfile.TemporaryDirectory() as output_dir,
+            patch("core.n_m3u8dl.subprocess.Popen", return_value=process),
+        ):
+            with self.assertRaises(DownloadCancelled):
+                run_n_m3u8dl(
+                    ["N_m3u8DL-RE.exe", "signed-url"],
+                    output_dir,
+                    "目标视频",
+                    cancel,
+                )
+
+        process.terminate.assert_called_once_with()
+        process.wait.assert_called_once()
+
+
 class TencentDownloaderTests(unittest.TestCase):
-    def test_video_page_uses_vqq_extractor_before_legacy_page_parsing(self):
+    def test_candidates_exclude_audio_only_formats(self):
+        formats = [
+            {
+                "format_id": "audio-only",
+                "url": "https://audio.example/stream.m3u8",
+                "vcodec": "none",
+                "acodec": "aac",
+                "height": None,
+            },
+            {
+                "format_id": "shd-0",
+                "url": "https://video.example/stream.m3u8",
+                "vcodec": "h264",
+                "acodec": "aac",
+                "height": 720,
+            },
+        ]
+
+        candidates = Tencent._format_candidates(formats)
+
+        self.assertEqual(
+            ["shd-0"],
+            [item["format_id"] for item in candidates],
+        )
+
+    def test_candidates_keep_tencent_formats_with_unknown_vcodec(self):
+        formats = [
+            {
+                "format_id": "shd-0",
+                "url": "https://video.example/stream.m3u8",
+                "vcodec": None,
+                "acodec": None,
+                "height": 720,
+            },
+        ]
+
+        candidates = Tencent._format_candidates(formats)
+
+        self.assertEqual(["shd-0"], [item["format_id"] for item in candidates])
+
+    def test_probe_timeout_moves_candidate_behind_a_fast_line(self):
+        formats = [
+            {
+                "format_id": "slow",
+                "url": "https://slow.example/stream.m3u8",
+                "vcodec": "h264",
+                "acodec": "aac",
+                "height": 720,
+            },
+            {
+                "format_id": "fast",
+                "url": "https://fast.example/stream.m3u8",
+                "vcodec": "h264",
+                "acodec": "aac",
+                "height": 720,
+            },
+        ]
+        downloader = Tencent()
+
+        with patch.object(
+            downloader,
+            "_probe_format",
+            side_effect=[0.0, 2048.0],
+        ):
+            ordered = downloader._ordered_candidates(formats, {})
+
+        self.assertEqual(
+            ["fast", "slow"],
+            [item["format_id"] for item in ordered],
+        )
+
+    def test_probe_stops_after_absolute_sampling_deadline(self):
+        class TricklingResponse:
+            def __init__(self):
+                self.chunks_yielded = 0
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, _chunk_size):
+                for _ in range(100):
+                    self.chunks_yielded += 1
+                    yield b"x" * 4096
+
+            def close(self):
+                pass
+
+        response = TricklingResponse()
+        downloader = Tencent()
+
+        with (
+            patch("platforms.tencent.requests.get", return_value=response),
+            patch(
+                "platforms.tencent.time.monotonic",
+                side_effect=[0.0, 0.5, 2.1, 2.2],
+            ),
+        ):
+            downloader._probe_format(
+                {"url": "https://slow.example/video.mp4"},
+                {},
+            )
+
+        self.assertEqual(2, response.chunks_yielded)
+
+    def test_probe_timeout_closes_pending_http_response(self):
+        class BlockingResponse:
+            def __init__(self):
+                self.closed = False
+                self.released = threading.Event()
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, _chunk_size):
+                self.released.wait(0.2)
+                if not self.closed:
+                    yield b"x" * 4096
+
+            def close(self):
+                self.closed = True
+                self.released.set()
+
+        response = BlockingResponse()
+        downloader = Tencent()
+        downloader.PROBE_DEADLINE = 0.01
+
+        with patch(
+            "platforms.tencent.requests.get",
+            return_value=response,
+        ):
+            downloader._ordered_candidates(
+                [{"format_id": "slow", "url": "https://slow/video.mp4"}],
+                {},
+            )
+
+        self.assertTrue(response.closed)
+
+    def test_output_validation_rejects_an_audio_only_file(self):
+        downloader = Tencent()
+        with patch.object(
+            downloader,
+            "_media_tracks",
+            return_value={"audio"},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "缺少视频轨"):
+                downloader._validate_output("audio-only.mp4", {})
+
+    def test_output_validation_accepts_video_and_audio_tracks(self):
+        downloader = Tencent()
+        with patch.object(
+            downloader,
+            "_media_tracks",
+            return_value={"video", "audio"},
+        ):
+            downloader._validate_output("complete.mp4", {})
+
+    def test_download_retries_after_an_audio_only_candidate(self):
+        with tempfile.TemporaryDirectory() as output_dir:
+            first_path = os.path.join(output_dir, "first.mp4")
+            second_path = os.path.join(output_dir, "second.mp4")
+            formats = [
+                {
+                    "format_id": "first-line",
+                    "url": "https://first.example/video.m3u8",
+                    "vcodec": "h264",
+                    "acodec": "aac",
+                },
+                {
+                    "format_id": "second-line",
+                    "url": "https://second.example/video.m3u8",
+                    "vcodec": "h264",
+                    "acodec": "aac",
+                },
+            ]
+            downloader = Tencent()
+
+            with (
+                patch.object(
+                    downloader,
+                    "_extract_with_yt_dlp",
+                    return_value={"title": "目标视频", "formats": formats},
+                ),
+                patch.object(
+                    downloader,
+                    "_ordered_candidates",
+                    return_value=formats,
+                ),
+                patch.object(
+                    downloader,
+                    "_download_candidate",
+                    side_effect=[first_path, second_path],
+                ) as download_candidate,
+                patch.object(
+                    downloader,
+                    "_validate_output",
+                    side_effect=[
+                        RuntimeError("下载结果缺少视频轨"),
+                        None,
+                    ],
+                ),
+            ):
+                result = downloader.download(
+                    "https://v.qq.com/x/page/n00467d0py3.html",
+                    output_dir,
+                    config={"max_threads": 7, "ffmpeg_path": ""},
+                )
+
+            self.assertTrue(result.success, result.message)
+            self.assertEqual(second_path, result.file_path)
+            self.assertEqual(2, download_candidate.call_count)
+
+    def test_candidate_download_caps_tencent_fragment_concurrency(self):
+        with tempfile.TemporaryDirectory() as output_dir:
+            expected_path = os.path.join(output_dir, "目标视频.mp4")
+            _FakeYoutubeDL.info = {
+                "title": "目标视频",
+                "ext": "mp4",
+                "_prepared_filename": expected_path,
+            }
+            _FakeYoutubeDL.download_flags = []
+            _FakeYoutubeDL.extracted_urls = []
+            fake_module = types.SimpleNamespace(YoutubeDL=_FakeYoutubeDL)
+            downloader = Tencent()
+
+            with (
+                patch.dict(sys.modules, {"yt_dlp": fake_module}),
+                patch(
+                    "platforms.tencent.find_n_m3u8dl",
+                    return_value=None,
+                ),
+                patch(
+                    "platforms.tencent.get_ffmpeg_path",
+                    return_value=None,
+                ),
+            ):
+                path = downloader._download_candidate(
+                    "https://v.qq.com/x/page/n00467d0py3.html",
+                    {"title": "目标视频"},
+                    {
+                        "format_id": "shd-0",
+                        "url": "https://fast.example/video.m3u8",
+                        "vcodec": "h264",
+                        "acodec": "aac",
+                    },
+                    {},
+                    output_dir,
+                    {"max_threads": 7, "ffmpeg_path": ""},
+                )
+
+            self.assertEqual(expected_path, path)
+            self.assertEqual(
+                2,
+                _FakeYoutubeDL.last_options[
+                    "concurrent_fragment_downloads"
+                ],
+            )
+            self.assertEqual(
+                "bestvideo+bestaudio/best",
+                _FakeYoutubeDL.last_options["format"],
+            )
+            self.assertEqual(
+                ["https://fast.example/video.m3u8"],
+                _FakeYoutubeDL.extracted_urls,
+            )
+            self.assertIn(
+                "[shd-0]",
+                _FakeYoutubeDL.last_options["outtmpl"],
+            )
+            self.assertEqual([True], _FakeYoutubeDL.download_flags)
+
+    def test_m3u8_candidate_prefers_n_m3u8dl_backend(self):
+        with tempfile.TemporaryDirectory() as output_dir:
+            expected_path = os.path.join(
+                output_dir,
+                "目标视频 [shd-0].mp4",
+            )
+            downloader = Tencent()
+            candidate = {
+                "format_id": "shd-0",
+                "url": "https://fast.example/video.m3u8?token=signed",
+                "http_headers": {"Origin": "https://v.qq.com"},
+            }
+
+            with (
+                patch(
+                    "platforms.tencent.find_n_m3u8dl",
+                    return_value="N_m3u8DL-RE.exe",
+                ),
+                patch(
+                    "platforms.tencent.build_n_m3u8dl_command",
+                    return_value=["external-command"],
+                ) as build_command,
+                patch(
+                    "platforms.tencent.run_n_m3u8dl",
+                    return_value=expected_path,
+                ) as run_external,
+            ):
+                result = downloader._download_candidate(
+                    "https://v.qq.com/x/page/n00467d0py3.html",
+                    {"title": "目标视频"},
+                    candidate,
+                    {"User-Agent": "Browser UA"},
+                    output_dir,
+                    {"max_threads": 4, "ffmpeg_path": ""},
+                )
+
+            self.assertEqual(expected_path, result)
+            build_command.assert_called_once()
+            run_external.assert_called_once()
+
+    def test_failed_n_m3u8dl_backend_falls_back_to_yt_dlp(self):
+        with tempfile.TemporaryDirectory() as output_dir:
+            expected_path = os.path.join(output_dir, "目标视频.mp4")
+            _FakeYoutubeDL.info = {
+                "title": "目标视频",
+                "ext": "mp4",
+                "_prepared_filename": expected_path,
+            }
+            _FakeYoutubeDL.download_flags = []
+            _FakeYoutubeDL.extracted_urls = []
+            fake_module = types.SimpleNamespace(YoutubeDL=_FakeYoutubeDL)
+            downloader = Tencent()
+
+            with (
+                patch.dict(sys.modules, {"yt_dlp": fake_module}),
+                patch(
+                    "platforms.tencent.find_n_m3u8dl",
+                    return_value="N_m3u8DL-RE.exe",
+                ),
+                patch(
+                    "platforms.tencent.build_n_m3u8dl_command",
+                    return_value=["external-command"],
+                ),
+                patch(
+                    "platforms.tencent.run_n_m3u8dl",
+                    side_effect=RuntimeError("external failed"),
+                ),
+                patch("platforms.tencent.get_ffmpeg_path", return_value=None),
+            ):
+                result = downloader._download_candidate(
+                    "https://v.qq.com/x/page/n00467d0py3.html",
+                    {"title": "目标视频"},
+                    {
+                        "format_id": "shd-0",
+                        "url": "https://fast.example/video.m3u8",
+                    },
+                    {},
+                    output_dir,
+                    {"max_threads": 4, "ffmpeg_path": ""},
+                )
+
+            self.assertEqual(expected_path, result)
+            self.assertEqual(
+                ["https://fast.example/video.m3u8"],
+                _FakeYoutubeDL.extracted_urls,
+            )
+
+    def test_direct_mp4_candidate_skips_n_m3u8dl_backend(self):
+        with tempfile.TemporaryDirectory() as output_dir:
+            expected_path = os.path.join(output_dir, "目标视频.mp4")
+            _FakeYoutubeDL.info = {
+                "title": "目标视频",
+                "ext": "mp4",
+                "_prepared_filename": expected_path,
+            }
+            _FakeYoutubeDL.download_flags = []
+            fake_module = types.SimpleNamespace(YoutubeDL=_FakeYoutubeDL)
+            downloader = Tencent()
+
+            with (
+                patch.dict(sys.modules, {"yt_dlp": fake_module}),
+                patch("platforms.tencent.find_n_m3u8dl") as find_external,
+                patch("platforms.tencent.get_ffmpeg_path", return_value=None),
+            ):
+                result = downloader._download_candidate(
+                    "https://v.qq.com/x/page/n00467d0py3.html",
+                    {"title": "目标视频"},
+                    {
+                        "format_id": "shd-0",
+                        "url": "https://fast.example/video.mp4?token=signed",
+                    },
+                    {},
+                    output_dir,
+                    {"max_threads": 4, "ffmpeg_path": ""},
+                )
+
+            self.assertEqual(expected_path, result)
+            find_external.assert_not_called()
+
+    def test_extraction_retry_uses_browser_session_headers(self):
+        with tempfile.TemporaryDirectory() as output_dir:
+            output_path = os.path.join(output_dir, "目标视频.mp4")
+            candidate = {
+                "format_id": "shd-0",
+                "url": "https://video.example/stream.m3u8",
+                "vcodec": "h264",
+                "acodec": "aac",
+            }
+            browser_headers = {
+                "User-Agent": "Browser UA",
+                "Referer": "https://v.qq.com/x/page/n00467d0py3.html",
+                "Cookie": "video_guid=browser",
+            }
+            downloader = Tencent()
+
+            with (
+                patch.object(
+                    downloader,
+                    "_extract_with_yt_dlp",
+                    side_effect=[
+                        RuntimeError("direct extraction failed"),
+                        {"title": "目标视频", "formats": [candidate]},
+                    ],
+                ) as extract,
+                patch.object(
+                    downloader,
+                    "_capture_browser_context",
+                    return_value=browser_headers,
+                ),
+                patch.object(
+                    downloader,
+                    "_ordered_candidates",
+                    return_value=[candidate],
+                ),
+                patch.object(
+                    downloader,
+                    "_download_candidate",
+                    return_value=output_path,
+                ),
+                patch.object(downloader, "_validate_output"),
+            ):
+                result = downloader.download(
+                    "https://v.qq.com/x/page/n00467d0py3.html",
+                    output_dir,
+                    config={"max_threads": 7, "ffmpeg_path": ""},
+                )
+
+            self.assertTrue(result.success, result.message)
+            self.assertEqual(browser_headers, extract.call_args_list[1].args[1])
+
+    @unittest.skip("旧浏览器媒体猜测流程已移除")
+    def test_player_body_extracts_hls_for_target_video(self):
+        player_data = {
+            "vl": {
+                "vi": [
+                    {
+                        "vid": "k41005qmjig",
+                        "ti": "腾讯目标视频",
+                        "ul": {
+                            "ui": [
+                                {
+                                    "url": "https://cdn.example/path/",
+                                    "hls": {"pt": "target.m3u8?token=ok"},
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        }
+        body = json.dumps({"vinfo": json.dumps(player_data)})
+
+        media = Tencent._extract_media_from_player_body(
+            body,
+            "k41005qmjig",
+        )
+
+        self.assertEqual(
+            "https://cdn.example/path/target.m3u8?token=ok",
+            media["url"],
+        )
+        self.assertEqual("腾讯目标视频", media["title"])
+
+    @unittest.skip("旧浏览器媒体猜测流程已移除")
+    def test_player_body_rejects_a_different_video(self):
+        player_data = {
+            "vl": {
+                "vi": [
+                    {
+                        "vid": "advertising",
+                        "ul": {
+                            "ui": [
+                                {
+                                    "url": "https://ad.example/",
+                                    "hls": {"pt": "advertising.m3u8"},
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        }
+        body = json.dumps({"vinfo": json.dumps(player_data)})
+
+        self.assertIsNone(
+            Tencent._extract_media_from_player_body(
+                body,
+                "k41005qmjig",
+            )
+        )
+
+    @unittest.skip("旧浏览器媒体猜测流程已移除")
+    def test_background_browser_captures_target_player_response(self):
+        player_data = {
+            "vl": {
+                "vi": [
+                    {
+                        "vid": "k41005qmjig",
+                        "ti": "浏览器捕获视频",
+                        "ul": {
+                            "ui": [
+                                {
+                                    "url": "https://cdn.example/video/",
+                                    "hls": {"pt": "index.m3u8"},
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        }
+        response_body = json.dumps(
+            {"vinfo": json.dumps(player_data)}
+        )
+
+        def event(method, params):
+            return {
+                "message": json.dumps(
+                    {
+                        "message": {
+                            "method": method,
+                            "params": params,
+                        }
+                    }
+                )
+            }
+
+        class FakeDriver:
+            title = "浏览器捕获视频 - 腾讯视频"
+
+            def __init__(self):
+                self.closed = False
+                self.visited_url = None
+                self.logs_read = False
+
+            def get(self, url):
+                self.visited_url = url
+
+            def get_log(self, _log_type):
+                if self.logs_read:
+                    return []
+                self.logs_read = True
+                return [
+                    event(
+                        "Network.responseReceived",
+                        {
+                            "requestId": "target-request",
+                            "response": {
+                                "url": "https://vd6.l.qq.com/proxyhttp",
+                                "mimeType": "application/json",
+                            },
+                        },
+                    ),
+                    event(
+                        "Network.loadingFinished",
+                        {"requestId": "target-request"},
+                    ),
+                ]
+
+            def execute_cdp_cmd(self, command, _params):
+                if command == "Network.getResponseBody":
+                    return {"body": response_body}
+                return {}
+
+            def execute_script(self, script):
+                if "navigator.userAgent" in script:
+                    return "Captured Browser UA"
+                return None
+
+            def get_cookies(self):
+                return [{"name": "video_guid", "value": "browser"}]
+
+            def quit(self):
+                self.closed = True
+
+        driver = FakeDriver()
+        downloader = Tencent()
+        with (
+            patch.object(
+                downloader,
+                "create_background_driver",
+                return_value=driver,
+            ),
+            patch("platforms.tencent.time.sleep"),
+        ):
+            captured = downloader._capture_browser_media(
+                "https://v.qq.com/x/page/k41005qmjig.html",
+                timeout_seconds=2,
+            )
+
+        self.assertEqual(
+            "https://cdn.example/video/index.m3u8",
+            captured["url"],
+        )
+        self.assertEqual("Captured Browser UA", captured["user_agent"])
+        self.assertEqual("browser", captured["cookies"][0]["value"])
+        self.assertTrue(driver.closed)
+
+    @unittest.skip("旧浏览器媒体猜测流程已移除")
+    def test_background_browser_waits_for_a_slow_player_response(self):
+        player_data = {
+            "vl": {
+                "vi": [
+                    {
+                        "vid": "n00467d0py3",
+                        "ti": "延迟出现的视频",
+                        "ul": {
+                            "ui": [
+                                {
+                                    "url": "https://cdn.example/video/",
+                                    "hls": {"pt": "slow.m3u8"},
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        }
+        response_body = json.dumps(
+            {"vinfo": json.dumps(player_data)}
+        )
+
+        def event(method, params):
+            return {
+                "message": json.dumps(
+                    {
+                        "message": {
+                            "method": method,
+                            "params": params,
+                        }
+                    }
+                )
+            }
+
+        class DelayedDriver:
+            title = "延迟出现的视频 - 腾讯视频"
+
+            def __init__(self):
+                self.logs_read = 0
+                self.closed = False
+
+            def get(self, _url):
+                pass
+
+            def get_log(self, _log_type):
+                self.logs_read += 1
+                if self.logs_read != 41:
+                    return []
+                return [
+                    event(
+                        "Network.responseReceived",
+                        {
+                            "requestId": "slow-request",
+                            "response": {
+                                "url": "https://vd6.l.qq.com/proxyhttp"
+                            },
+                        },
+                    ),
+                    event(
+                        "Network.loadingFinished",
+                        {"requestId": "slow-request"},
+                    ),
+                ]
+
+            def execute_cdp_cmd(self, command, _params):
+                if command == "Network.getResponseBody":
+                    return {"body": response_body}
+                return {}
+
+            def execute_script(self, script):
+                if "navigator.userAgent" in script:
+                    return "Delayed Browser UA"
+                return None
+
+            def get_cookies(self):
+                return []
+
+            def quit(self):
+                self.closed = True
+
+        driver = DelayedDriver()
+        downloader = Tencent()
+        with (
+            patch.object(
+                downloader,
+                "create_background_driver",
+                return_value=driver,
+            ),
+            patch("platforms.tencent.time.sleep"),
+        ):
+            captured = downloader._capture_browser_media(
+                "https://v.qq.com/x/cover/mzc0020016apvkq/"
+                "n00467d0py3.html"
+            )
+
+        self.assertEqual(
+            "https://cdn.example/video/slow.m3u8",
+            captured["url"],
+        )
+        self.assertEqual(41, driver.logs_read)
+        self.assertTrue(driver.closed)
+
+    @unittest.skip("旧浏览器媒体猜测流程已移除")
+    def test_background_browser_uses_media_after_target_vinfo_proxy(self):
+        target_body = json.dumps(
+            {
+                "ret": 0,
+                "data": {
+                    "playInfo": {"vid": "n00467d0py3"},
+                    "videoInfo": {
+                        "vid": "n00467d0py3",
+                        "title": "encrypted-player-title",
+                    },
+                    "proxyhttp": {"vinfo": "encrypted-player-data"},
+                },
+            }
+        )
+
+        def event(method, params):
+            return {
+                "message": json.dumps(
+                    {
+                        "message": {
+                            "method": method,
+                            "params": params,
+                        }
+                    }
+                )
+            }
+
+        class VinfoProxyDriver:
+            title = "新版播放器目标视频 - 腾讯视频"
+
+            def __init__(self):
+                self.logs_read = 0
+                self.closed = False
+
+            def get(self, _url):
+                pass
+
+            def get_log(self, _log_type):
+                self.logs_read += 1
+                if self.logs_read == 1:
+                    return [
+                        event(
+                            "Network.responseReceived",
+                            {
+                                "requestId": "vinfo-request",
+                                "response": {
+                                    "url": (
+                                        "https://vd6.l.qq.com/"
+                                        "vinfo_proxy"
+                                    )
+                                },
+                            },
+                        ),
+                        event(
+                            "Network.loadingFinished",
+                            {"requestId": "vinfo-request"},
+                        ),
+                        event(
+                            "Network.responseReceived",
+                            {
+                                "requestId": "advertisement-manifest",
+                                "response": {
+                                    "url": (
+                                        "https://video.example/ad/"
+                                        "advertisement.m3u8"
+                                    )
+                                },
+                            },
+                        ),
+                    ]
+                if self.logs_read == 2:
+                    return [
+                        event(
+                            "Network.responseReceived",
+                            {
+                                "requestId": "manifest-request",
+                                "response": {
+                                    "url": (
+                                        "https://video.example/target/"
+                                        "index.m3u8?token=browser"
+                                    )
+                                },
+                            },
+                        )
+                    ]
+                return []
+
+            def execute_cdp_cmd(self, command, _params):
+                if command == "Network.getResponseBody":
+                    return {"body": target_body}
+                return {}
+
+            def execute_script(self, script):
+                if "navigator.userAgent" in script:
+                    return "Vinfo Proxy Browser UA"
+                if "Number.isFinite" in script:
+                    return self.logs_read >= 2
+                return None
+
+            def get_cookies(self):
+                return [{"name": "guid", "value": "target"}]
+
+            def quit(self):
+                self.closed = True
+
+        driver = VinfoProxyDriver()
+        downloader = Tencent()
+        with (
+            patch.object(
+                downloader,
+                "create_background_driver",
+                return_value=driver,
+            ),
+            patch("platforms.tencent.time.sleep"),
+        ):
+            captured = downloader._capture_browser_media(
+                "https://v.qq.com/x/cover/mzc0020016apvkq/"
+                "n00467d0py3.html",
+                timeout_seconds=1,
+            )
+
+        self.assertEqual(
+            "https://video.example/target/index.m3u8?token=browser",
+            captured["url"],
+        )
+        self.assertEqual("新版播放器目标视频", captured["title"])
+        self.assertEqual("n00467d0py3", captured["video_id"])
+        self.assertTrue(driver.closed)
+
+    @unittest.skip("旧浏览器媒体猜测流程已移除")
+    def test_background_browser_uses_playing_video_without_vinfo_event(self):
+        advertisement_url = (
+            "https://video.example/ad/advertisement.m3u8"
+        )
+        target_url = (
+            "https://video.example/target/index.m3u8?token=browser"
+        )
+
+        def event(url):
+            return {
+                "message": json.dumps(
+                    {
+                        "message": {
+                            "method": "Network.responseReceived",
+                            "params": {
+                                "requestId": url,
+                                "response": {"url": url},
+                            },
+                        }
+                    }
+                )
+            }
+
+        class PlaybackDriver:
+            title = "页面正片标题_腾讯视频"
+
+            def __init__(self):
+                self.logs_read = 0
+                self.closed = False
+
+            def get(self, _url):
+                pass
+
+            def get_log(self, _log_type):
+                self.logs_read += 1
+                if self.logs_read == 1:
+                    return [event(advertisement_url)]
+                if self.logs_read == 2:
+                    return [event(target_url)]
+                return []
+
+            def execute_cdp_cmd(self, _command, _params):
+                return {}
+
+            def execute_script(self, script):
+                if "navigator.userAgent" in script:
+                    return "Playback Browser UA"
+                if "performance.getEntriesByType" in script:
+                    urls = [advertisement_url]
+                    if self.logs_read >= 2:
+                        urls.append(target_url)
+                    return {
+                        "main_started": self.logs_read >= 2,
+                        "media_urls": urls,
+                    }
+                return None
+
+            def get_cookies(self):
+                return []
+
+            def quit(self):
+                self.closed = True
+
+        driver = PlaybackDriver()
+        downloader = Tencent()
+        with (
+            patch.object(
+                downloader,
+                "create_background_driver",
+                return_value=driver,
+            ),
+            patch("platforms.tencent.time.sleep"),
+        ):
+            captured = downloader._capture_browser_media(
+                "https://v.qq.com/x/cover/mzc0020016apvkq/"
+                "n00467d0py3.html",
+                timeout_seconds=1,
+            )
+
+        self.assertEqual(target_url, captured["url"])
+        self.assertEqual("页面正片标题", captured["title"])
+        self.assertEqual("n00467d0py3", captured["video_id"])
+        self.assertTrue(driver.closed)
+
+    @unittest.skip("旧 browser-first 下载流程已移除")
+    def test_download_uses_browser_media_before_page_extractor(self):
+        with tempfile.TemporaryDirectory() as output_dir:
+            expected_path = os.path.join(
+                output_dir,
+                "浏览器目标视频.mp4",
+            )
+            captured_url = (
+                "https://cdn.example/video/target.m3u8?token=ok"
+            )
+            _FakeYoutubeDL.info = {
+                "title": "浏览器目标视频",
+                "ext": "mp4",
+                "_prepared_filename": expected_path,
+            }
+            _FakeYoutubeDL.download_flags = []
+            _FakeYoutubeDL.extracted_urls = []
+            fake_module = types.SimpleNamespace(YoutubeDL=_FakeYoutubeDL)
+            downloader = Tencent()
+
+            with (
+                patch.dict(sys.modules, {"yt_dlp": fake_module}),
+                patch.object(
+                    downloader,
+                    "_capture_browser_media",
+                    return_value={
+                        "url": captured_url,
+                        "title": "浏览器目标视频",
+                        "cookies": [
+                            {"name": "video_guid", "value": "browser"}
+                        ],
+                        "user_agent": "Captured Browser UA",
+                        "referer": (
+                            "https://v.qq.com/x/page/k41005qmjig.html"
+                        ),
+                    },
+                ) as capture,
+            ):
+                result = downloader.download(
+                    "https://v.qq.com/x/page/k41005qmjig.html",
+                    output_dir,
+                    config={"max_threads": 7, "ffmpeg_path": ""},
+                )
+
+            self.assertTrue(result.success, result.message)
+            self.assertEqual(expected_path, result.file_path)
+            self.assertEqual([True], _FakeYoutubeDL.download_flags)
+            self.assertEqual([captured_url], _FakeYoutubeDL.extracted_urls)
+            self.assertEqual(
+                "video_guid=browser",
+                _FakeYoutubeDL.last_options["http_headers"]["Cookie"],
+            )
+            self.assertEqual(
+                "Captured Browser UA",
+                _FakeYoutubeDL.last_options["http_headers"]["User-Agent"],
+            )
+            capture.assert_called_once()
+
+    @unittest.skip("旧 browser-first 下载流程已移除")
+    def test_yt_dlp_download_is_used_when_browser_capture_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as output_dir:
+            expected_path = os.path.join(output_dir, "tencent.mp4")
+            _FakeYoutubeDL.info = {
+                "title": "腾讯回退",
+                "ext": "mp4",
+                "formats": [],
+                "_prepared_filename": expected_path,
+            }
+            _FakeYoutubeDL.download_flags = []
+            fake_module = types.SimpleNamespace(YoutubeDL=_FakeYoutubeDL)
+
+            downloader = Tencent()
+            with (
+                patch.dict(sys.modules, {"yt_dlp": fake_module}),
+                patch.object(
+                    downloader,
+                    "_capture_browser_media",
+                    side_effect=RuntimeError("capture unavailable"),
+                ),
+            ):
+                result = downloader.download(
+                    "https://v.qq.com/x/page/example.html",
+                    output_dir,
+                    config={"max_threads": 3, "ffmpeg_path": ""},
+                )
+
+            self.assertTrue(result.success, result.message)
+            self.assertEqual(expected_path, result.file_path)
+            self.assertEqual([True], _FakeYoutubeDL.download_flags)
+
+    @unittest.skip("旧 browser-first 下载流程已移除")
+    def test_video_page_falls_back_to_vqq_extractor_when_capture_fails(self):
         with tempfile.TemporaryDirectory() as output_dir:
             expected_path = os.path.join(output_dir, "tencent.mp4")
             _FakeYoutubeDL.info = {
@@ -276,15 +1457,17 @@ class TencentDownloaderTests(unittest.TestCase):
             }
             _FakeYoutubeDL.last_options = None
             fake_module = types.SimpleNamespace(YoutubeDL=_FakeYoutubeDL)
+            downloader = Tencent()
 
             with (
                 patch.dict(sys.modules, {"yt_dlp": fake_module}),
-                patch(
-                    "platforms.tencent.requests.Session",
-                    side_effect=AssertionError("不应先读取旧版页面状态"),
+                patch.object(
+                    downloader,
+                    "_capture_browser_media",
+                    side_effect=RuntimeError("capture unavailable"),
                 ),
             ):
-                result = Tencent().download(
+                result = downloader.download(
                     "https://v.qq.com/x/cover/example/video.html",
                     output_dir,
                 )
@@ -292,6 +1475,7 @@ class TencentDownloaderTests(unittest.TestCase):
             self.assertTrue(result.success, result.message)
             self.assertEqual(expected_path, result.file_path)
 
+    @unittest.skip("腾讯并发策略已改为固定上限 2")
     def test_configured_threads_control_fragment_concurrency(self):
         with tempfile.TemporaryDirectory() as output_dir:
             expected_path = os.path.join(output_dir, "tencent.mp4")
@@ -303,15 +1487,17 @@ class TencentDownloaderTests(unittest.TestCase):
             fake_module = types.SimpleNamespace(
                 YoutubeDL=_ConcurrentYoutubeDL
             )
+            downloader = Tencent()
 
             with (
                 patch.dict(sys.modules, {"yt_dlp": fake_module}),
-                patch(
-                    "platforms.tencent.requests.Session",
-                    side_effect=AssertionError("并发配置未传给 yt-dlp"),
+                patch.object(
+                    downloader,
+                    "_capture_browser_media",
+                    side_effect=RuntimeError("capture unavailable"),
                 ),
             ):
-                result = Tencent().download(
+                result = downloader.download(
                     "https://v.qq.com/x/cover/example/video.html",
                     output_dir,
                     config={"max_threads": 7, "ffmpeg_path": ""},

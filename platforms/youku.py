@@ -1,12 +1,11 @@
-import json
 import os
 import re
+import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox
-import requests
-from bs4 import BeautifulSoup
 from core.downloader import BaseDownloader, DownloadResult
-from core.utils import sanitize_filename, get_ffmpeg_path, ensure_dir, merge_ts
+from core.instruction_panel import InstructionPanel
+from core.utils import get_ffmpeg_path, ensure_dir
 
 
 class Youku(BaseDownloader):
@@ -16,11 +15,23 @@ class Youku(BaseDownloader):
 
     TIP = "支持：v.youku.com/v_show/id_xxx、youku.com/v_show/id_xxx"
 
+    @staticmethod
+    def _normalize_url(url):
+        from urllib.parse import unquote
+
+        ids = set(re.findall(
+            r"https?://(?:v\.)?youku\.com/v_show/id_([A-Za-z0-9=]+)\.html",
+            unquote(url).replace("\\_", "_"),
+        ))
+        if len(ids) != 1:
+            raise ValueError("请粘贴一个优酷视频播放页链接")
+        return f"https://v.youku.com/v_show/id_{ids.pop()}.html"
+
     def create_tab(self, parent):
         frame = ttk.Frame(parent, padding=10)
         ttk.Label(frame, text="优酷", font=("", 16, "bold")).pack(anchor="w")
         ttk.Label(frame, text=f"{self.icon} {self.description}").pack(anchor="w", pady=(0, 4))
-        ttk.Label(frame, text="视频地址:").pack(anchor="w")
+        ttk.Label(frame, text="仅支持非 VIP 普通视频；复制播放页链接到下方：").pack(anchor="w")
         self.url_var = tk.StringVar()
         ttk.Entry(frame, textvariable=self.url_var, width=60).pack(fill="x", pady=5)
         ttk.Label(frame, text=self.TIP, foreground="#6c757d", font=("", 8)).pack(anchor="w", pady=(0, 6))
@@ -28,6 +39,15 @@ class Youku(BaseDownloader):
             frame, self._on_download
         ).pack(anchor="center", pady=10)
         self.create_status_label(frame)
+        InstructionPanel(
+            frame,
+            steps=[
+                "在浏览器中打开要下载的优酷普通视频，并选择目标集数。",
+                "复制地址栏中的完整链接，粘贴到上方后点击下载。",
+                "仅支持非 VIP 视频；下载在后台执行，可点击停止下载。",
+            ],
+            image_name="优酷下载说明.png",
+        ).pack(fill="both", expand=True, pady=(8, 0))
         return frame
 
     def _on_download(self):
@@ -38,121 +58,51 @@ class Youku(BaseDownloader):
         output_dir = self.get_output_dir("youku")
         self.start_download(url, output_dir)
 
-    def _parse_state(self, html):
-        m = re.search(r"window\.__INITIAL_STATE__\s*=\s*(\{.+?\})\s*(?:;|</)", html, re.DOTALL)
-        if m:
-            return json.loads(m.group(1))
-        return None
-
-    def _find_segs(self, state):
-        for key in ("videoData", "showData", "programInfo"):
-            vd = state.get(key, {})
-            streams = vd.get("streams", [])
-            if not streams:
-                continue
-            for s in streams:
-                segs = s.get("segs", [])
-                if segs:
-                    title = vd.get("title", "youku_video")
-                    return title, [seg["cdn_url"] for seg in segs if seg.get("cdn_url")]
-        return None, []
+    def _validate_output(self, path, config):
+        if not os.path.isfile(path) or os.path.getsize(path) == 0:
+            raise RuntimeError("优酷下载未生成有效文件")
+        ffmpeg = get_ffmpeg_path(config)
+        if not ffmpeg:
+            raise RuntimeError("未找到 FFmpeg，无法校验音视频")
+        result = subprocess.run(
+            [ffmpeg, "-v", "error", "-i", path, "-map", "0:v:0", "-map", "0:a:0",
+             "-t", "0", "-f", "null", "-"],
+            capture_output=True, timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if result.returncode:
+            raise RuntimeError("优酷下载文件无法解析或缺少音视频轨")
 
     def download(self, url, output_dir, **kwargs):
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://v.youku.com/"
-        }
         try:
-            def _do_download(state_or_html, cookie_str=""):
-                if isinstance(state_or_html, str):
-                    state = self._parse_state(state_or_html)
-                else:
-                    state = state_or_html
-                if not state:
-                    return None
-                title, seg_urls = self._find_segs(state)
-                if not seg_urls:
-                    return None
-                title = sanitize_filename(title or "youku_video")
-                ensure_dir(output_dir)
-                output_path = os.path.join(output_dir, f"{title}.mp4")
-                h = {**headers}
-                if cookie_str:
-                    h["Cookie"] = cookie_str
+            from yt_dlp import YoutubeDL
 
-                if len(seg_urls) == 1:
-                    self._set_status("正在下载...")
-                    r = requests.get(seg_urls[0], headers=h, stream=True, timeout=60)
-                    r.raise_for_status()
-                    self.download_response(r, output_path)
-                    return DownloadResult(True, "下载完成", output_path)
-
-                filelist = os.path.join(output_dir, "filelist.txt")
-                with open(filelist, "w") as f:
-                    for cdn in seg_urls:
-                        name = cdn.split("/")[-1].split("?")[0]
-                        if not name:
-                            name = f"seg_{seg_urls.index(cdn)}.ts"
-                        f.write(f"file '{name}'\n")
-
-                self._set_status("正在下载视频分片...")
-                for cdn in seg_urls:
-                    name = cdn.split("/")[-1].split("?")[0]
-                    if not name:
-                        name = f"seg_{seg_urls.index(cdn)}.ts"
-                    r = requests.get(cdn, headers=h, stream=True, timeout=60)
-                    r.raise_for_status()
-                    self.download_response(
-                        r, os.path.join(output_dir, name)
-                    )
-
-                ffmpeg = get_ffmpeg_path(kwargs.get("config"))
-                if not ffmpeg:
-                    return DownloadResult(False, "未找到 FFmpeg，无法合并视频")
-                self._set_status("正在合并视频...")
-                if merge_ts(filelist, output_path, ffmpeg):
-                    for f in os.listdir(output_dir):
-                        if f.endswith(".ts"):
-                            os.remove(os.path.join(output_dir, f))
-                    os.remove(filelist)
-                    return DownloadResult(True, "下载完成", output_path)
-                return DownloadResult(False, "FFmpeg 合并失败")
-
-            # --- direct try ---
-            self._set_status("正在解析优酷视频...")
-            s = requests.Session()
-            s.headers.update(headers)
-            resp = s.get(url, timeout=15)
-            html = resp.text
-            result = _do_download(html)
-            if result:
-                return result
-
-            # --- selenium fallback ---
-            try:
-                from core.browser import cookies_to_header
-                import time
-
-                self._set_status("正在后台解析优酷页面...")
-                driver = self.create_background_driver()
-                driver.get(url)
-                time.sleep(6)
-
-                state2 = driver.execute_script("return window.__INITIAL_STATE__;")
-                cookies = driver.get_cookies()
-                driver.quit()
-
-                ck = cookies_to_header(cookies)
-                result2 = _do_download(state2, cookie_str=ck)
-                if result2:
-                    return result2
-                return DownloadResult(False, "未能解析视频数据，请尝试使用 VIP 播放")
-            except ImportError:
-                return DownloadResult(False, "需要安装 selenium 和 Chrome 浏览器\npip install selenium")
-            except Exception as se:
-                self._raise_if_cancelled()
-                return DownloadResult(False, f"自动化获取失败: {se}")
-
-        except Exception as e:
+            url = self._normalize_url(url)
+            config = kwargs.get("config")
             self._raise_if_cancelled()
-            return DownloadResult(False, f"下载失败: {e}")
+            ensure_dir(output_dir)
+            options = {
+                "outtmpl": os.path.join(output_dir, "%(title)s [%(id)s].%(ext)s"),
+                "format": "best",
+                "noplaylist": True,
+                "skip_unavailable_fragments": False,
+                "socket_timeout": 10,
+                "retries": 2,
+                "fragment_retries": 2,
+                "extractor_retries": 1,
+            }
+            options.update(self.get_yt_dlp_runtime_options(config))
+            ffmpeg = get_ffmpeg_path(config)
+            if ffmpeg:
+                options["ffmpeg_location"] = ffmpeg
+            self._set_status("正在解析并下载优酷正片...")
+            with YoutubeDL(options) as ydl:
+                info = ydl.extract_info(url, download=True)
+                output_path = ydl.prepare_filename(info)
+            self._raise_if_cancelled()
+            self._set_status("正在校验优酷音视频...")
+            self._validate_output(output_path, config)
+            return DownloadResult(True, "下载完成", output_path)
+        except Exception as error:
+            self._raise_if_cancelled()
+            return DownloadResult(False, f"优酷下载失败：{error}")

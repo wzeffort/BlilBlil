@@ -16,7 +16,7 @@ class Bilibili(BaseDownloader):
         frame = ttk.Frame(parent, padding=10)
         ttk.Label(frame, text="B站", font=("", 16, "bold")).pack(anchor="w")
         ttk.Label(frame, text=f"{self.icon} {self.description}").pack(anchor="w", pady=(0, 2))
-        ttk.Label(frame, text="视频地址:").pack(anchor="w")
+        ttk.Label(frame, text="仅支持非 VIP 普通视频；复制播放页链接到下方：").pack(anchor="w")
         self.url_var = tk.StringVar()
         ttk.Entry(frame, textvariable=self.url_var, width=60).pack(fill="x", pady=3)
         self.create_download_controls(
@@ -25,8 +25,8 @@ class Bilibili(BaseDownloader):
         InstructionPanel(
             frame,
             steps=[
-                "打开 B 站视频，右键点击播放器画面。",
-                "选择“复制视频地址（精准空降）”。",
+                "在浏览器打开要下载的 B 站普通视频。",
+                "复制地址栏链接，也可使用图中的“复制视频地址”。",
                 "将地址粘贴到上方输入框，然后点击下载。",
             ],
             image_name="b站下载说明.png",

@@ -1,6 +1,8 @@
 import json
 import os
 import re
+import subprocess
+import tempfile
 import time
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -8,6 +10,9 @@ import requests
 from bs4 import BeautifulSoup
 from core.downloader import BaseDownloader, DownloadResult
 from core.browser import cookies_to_header
+from core.instruction_panel import InstructionPanel
+from core.iqiyi_routes import resolve_browser_manifest
+from core.n_m3u8dl import build_n_m3u8dl_command, find_n_m3u8dl, run_n_m3u8dl
 from core.utils import (
     ensure_dir,
     get_ffmpeg_path,
@@ -25,7 +30,7 @@ class IQiyi(BaseDownloader):
         frame = ttk.Frame(parent, padding=10)
         ttk.Label(frame, text="iQiyi", font=("", 16, "bold")).pack(anchor="w")
         ttk.Label(frame, text=f"{self.icon} {self.description}").pack(anchor="w", pady=(0, 10))
-        ttk.Label(frame, text="视频页面或 DASH API 地址:").pack(anchor="w")
+        ttk.Label(frame, text="仅支持非 VIP 普通视频；复制播放页链接到下方：").pack(anchor="w")
         self.url_var = tk.StringVar()
         ttk.Entry(frame, textvariable=self.url_var, width=60).pack(fill="x", pady=5)
         ttk.Label(
@@ -38,6 +43,15 @@ class IQiyi(BaseDownloader):
             frame, self._on_download
         ).pack(anchor="center", pady=10)
         self.create_status_label(frame)
+        InstructionPanel(
+            frame,
+            steps=[
+                "在浏览器中打开想下载的爱奇艺视频播放页。",
+                "复制地址栏中的完整链接，粘贴到上方输入框，点击下载。",
+                "解析在后台静音进行；如需等待广告结束，请稍等，也可点击停止下载。",
+            ],
+            image_name="爱奇艺下载说明.png",
+        ).pack(fill="both", expand=True, pady=(8, 0))
         return frame
 
     @staticmethod
@@ -106,7 +120,10 @@ class IQiyi(BaseDownloader):
                     )
                     if media_url:
                         break
-                if media_url:
+                if media_url and (
+                    ".m3u8" not in media_url.lower()
+                    or self._target_segment_urls(urls, target_tvid)
+                ):
                     break
 
             title = sanitize_filename(
@@ -144,24 +161,9 @@ class IQiyi(BaseDownloader):
             if cookie_header:
                 headers["Cookie"] = cookie_header
             if ".m3u8" in media_url.lower():
-                from yt_dlp import YoutubeDL
-
-                options = {
-                    "outtmpl": output_path,
-                    "format": "best",
-                    "http_headers": headers,
-                    "nocheckcertificate": True,
-                    "noplaylist": True,
-                }
-                options.update(
-                    self.get_yt_dlp_runtime_options(config)
+                output_path = self._download_hls(
+                    media_url, urls, target_tvid, headers, output_path, config,
                 )
-                ffmpeg = get_ffmpeg_path(config)
-                if ffmpeg:
-                    options["ffmpeg_location"] = ffmpeg
-                    options["merge_output_format"] = "mp4"
-                with YoutubeDL(options) as ydl:
-                    ydl.extract_info(media_url, download=True)
                 return DownloadResult(
                     True, "下载完成", output_path
                 )
@@ -212,6 +214,68 @@ class IQiyi(BaseDownloader):
         except Exception as error:
             self._raise_if_cancelled()
             return DownloadResult(False, f"爱奇艺视频下载失败: {error}")
+
+    @staticmethod
+    def _target_segment_urls(urls, target_tvid):
+        from urllib.parse import parse_qs, urlsplit
+
+        return [url for url in urls if urlsplit(url).path.endswith(".ts")
+                and parse_qs(urlsplit(url).query).get("qd_tvid") == [str(target_tvid)]]
+
+    def _validate_hls_output(self, path, config):
+        if not os.path.isfile(path) or os.path.getsize(path) == 0:
+            raise RuntimeError("爱奇艺下载未生成有效文件")
+        ffmpeg = get_ffmpeg_path(config)
+        if not ffmpeg:
+            raise RuntimeError("未找到 FFmpeg，无法校验音视频")
+        result = subprocess.run(
+            [ffmpeg, "-v", "error", "-i", path, "-map", "0:v:0", "-map", "0:a:0",
+             "-t", "0", "-f", "null", "-"],
+            capture_output=True, timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if result.returncode:
+            raise RuntimeError("爱奇艺下载文件无法解析或缺少音视频轨")
+
+    def _download_hls(self, media_url, observed_urls, target_tvid, headers, output_path, config):
+        with requests.get(media_url, headers=headers, timeout=(4, 10)) as response:
+            response.raise_for_status()
+            manifest = response.text
+        resolved = resolve_browser_manifest(manifest, observed_urls, target_tvid)
+        if resolved:
+            executable = find_n_m3u8dl(config)
+            if not executable:
+                raise RuntimeError("未找到 N_m3u8DL-RE，无法下载爱奇艺 CDN 播放列表")
+            self._set_status("已匹配爱奇艺正片 CDN，正在下载全部分片...")
+            with tempfile.TemporaryDirectory(prefix="iqiyi-route-") as temp_dir:
+                playlist = os.path.join(temp_dir, "video.m3u8")
+                with open(playlist, "w", encoding="utf-8") as file:
+                    file.write(resolved)
+                output_dir = os.path.dirname(os.path.abspath(output_path))
+                save_name = os.path.splitext(os.path.basename(output_path))[0]
+                command = build_n_m3u8dl_command(
+                    executable, playlist, headers, output_dir, save_name, config,
+                    get_ffmpeg_path(config),
+                )
+                output_path = run_n_m3u8dl(command, output_dir, save_name, self._raise_if_cancelled)
+        else:
+            if "data.video.iqiyi.com/videos/" in manifest:
+                raise RuntimeError("未捕获到与正片分片匹配的 CDN 会话，请重试")
+            from yt_dlp import YoutubeDL
+
+            options = {
+                "outtmpl": output_path, "format": "best", "http_headers": headers,
+                "noplaylist": True, "skip_unavailable_fragments": False,
+                "fragment_retries": 2, "socket_timeout": 10,
+            }
+            options.update(self.get_yt_dlp_runtime_options(config))
+            ffmpeg = get_ffmpeg_path(config)
+            if ffmpeg:
+                options.update(ffmpeg_location=ffmpeg, merge_output_format="mp4")
+            with YoutubeDL(options) as ydl:
+                ydl.extract_info(media_url, download=True)
+        self._validate_hls_output(output_path, config)
+        return output_path
 
     def _on_download(self):
         video_url = self.url_var.get().strip()

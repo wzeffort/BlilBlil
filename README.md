@@ -1,4 +1,4 @@
-# BlilBlil — Multi-Platform Video Downloader & VIP Player
+# BlilBlil — Multi-Platform Video Downloader
 
 [中文](#中文) | [English](#english)
 
@@ -6,7 +6,7 @@
 
 ## 中文
 
-BlilBlil 是一个多平台视频下载工具，支持主流视频网站的视频下载和 VIP 视频解析播放。
+BlilBlil 是一个多平台视频下载工具，支持主流视频网站的非 VIP 普通视频下载。复制播放页链接即可。
 
 ### 支持的平台
 
@@ -14,14 +14,12 @@ BlilBlil 是一个多平台视频下载工具，支持主流视频网站的视�
 - 🎵 **抖音** — 直接下载 mp4
 - 📺 **腾讯视频** — M3U8 分段下载
 - 🎥 **爱奇艺** — DASH API → M3U8 下载
-- 🎞 **优酷** — Mtop API 下载
+- 🎞 **优酷** — yt-dlp 解析下载
 - ▶ **YouTube** — yt-dlp 下载
-- 📡 **CCTV** — HLS 流直接下载
-- 🔗 **通用 M3U8** — 任意 M3U8 链接下载
 
-### VIP 播放
+### VIP 视频免费播放
 
-内置 VIP 视频解析器，支持搜索腾讯视频并调用第三方解析通道播放。
+粘贴视频链接，选择线路后点击“解析播放”。默认使用虾米解析，也可切换备用线路。输入片名可使用“官网打开 / 搜索”。第三方线路能否播放以实际结果为准。
 
 ### 安装
 
@@ -29,6 +27,11 @@ BlilBlil 是一个多平台视频下载工具，支持主流视频网站的视�
 pip install -r requirements.txt
 python main.py
 ```
+
+下载工具需单独准备（不随源码提交）：
+
+- 将 FFmpeg 放到 `ffmpeg/ffmpeg.exe`，或在 `config.json` 中设置 `ffmpeg_path`。
+- 腾讯 / 爱奇艺高速下载使用 [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE/releases)。将 Windows x64 程序放到 `tools/N_m3u8DL-RE/N_m3u8DL-RE.exe`，或设置 `n_m3u8dl_path`。本地使用版本见该目录的 `VERSION.txt`。
 
 ### 打包
 
@@ -49,14 +52,12 @@ BlilBlil is a multi-platform video downloader supporting mainstream video sites.
 - 🎵 **Douyin** — direct mp4 download
 - 📺 **Tencent Video** — M3U8 segment download
 - 🎥 **iQiyi** — DASH API → M3U8 download
-- 🎞 **Youku** — Mtop API download
+- 🎞 **Youku** — yt-dlp download
 - ▶ **YouTube** — yt-dlp download
-- 📡 **CCTV** — HLS stream download
-- 🔗 **Generic M3U8** — any M3U8 URL
 
-### VIP Player
+### Video playback
 
-Built-in VIP video parser supporting Tencent Video search with third-party parsing routes.
+Paste a video URL and choose a route to play. XMFLV is the default, with an alternative route available. Use the official-site button to open the original page or search Tencent Video by title. Playback availability depends on the provider. Downloads support non-VIP videos only.
 
 ### Install
 
