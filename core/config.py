@@ -4,8 +4,9 @@ import os
 DEFAULT_CONFIG = {
     "download_dir": "./downloads",
     "ffmpeg_path": "",
+    "n_m3u8dl_path": "",
     "language": "zh",
-    "max_threads": 7
+    "max_threads": 4,
 }
 
 

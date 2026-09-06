@@ -29,7 +29,7 @@ class Douyin(BaseDownloader):
         frame = ttk.Frame(parent, padding=10)
         ttk.Label(frame, text="抖音", font=("", 16, "bold")).pack(anchor="w")
         ttk.Label(frame, text=f"{self.icon} {self.description}").pack(anchor="w", pady=(0, 2))
-        ttk.Label(frame, text="视频地址:").pack(anchor="w")
+        ttk.Label(frame, text="仅支持非 VIP 普通视频；复制播放页链接到下方：").pack(anchor="w")
         self.url_var = tk.StringVar()
         ttk.Entry(frame, textvariable=self.url_var, width=60).pack(fill="x", pady=3)
         ttk.Label(frame, text="支持：douyin.com/video/xxx、v.douyin.com/xxx", foreground="#6c757d", font=("", 8)).pack(anchor="w", pady=(0, 2))

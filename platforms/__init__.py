@@ -11,7 +11,7 @@ def discover_platforms():
         return _platforms
     package = importlib.import_module("platforms")
     for importer, modname, ispkg in pkgutil.iter_modules(package.__path__):
-        if modname.startswith("_"):
+        if modname.startswith("_") or modname == "cctv":
             continue
         module = importlib.import_module(f"platforms.{modname}")
         for attr in dir(module):
