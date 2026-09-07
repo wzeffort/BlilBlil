@@ -23,6 +23,10 @@ BlilBlil 是一个多平台视频下载工具，支持主流视频网站的非 V
 
 ### 安装
 
+Windows 用户双击根目录的 **start.bat** 即可启动。脚本自动查找项目虚拟环境、已登记的 Conda 环境（优先 `mv`）及系统 Python，检查依赖后启动窗口，无需手动激活环境。首次使用仍需安装下列依赖。
+
+运行 `start.bat --check` 可仅检查环境；启动日志保存在 `%LOCALAPPDATA%\BlilBlil\logs`。脚本不会自动安装依赖或修改系统环境。
+
 ```bash
 pip install -r requirements.txt
 python main.py
