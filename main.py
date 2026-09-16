@@ -1,3 +1,5 @@
+import os
+import subprocess
 import tkinter as tk
 from tkinter import ttk, filedialog
 from core.config import Config
@@ -75,18 +77,21 @@ class BlilBlilApp:
             font=("Segoe UI", 9)
         ).pack(side="left")
 
-        self.dir_var = tk.StringVar(value=self.config["download_dir"])
+        self.dir_var = tk.StringVar(value=os.path.abspath(self.config["download_dir"]))
         dir_entry = ttk.Entry(
             brand, textvariable=self.dir_var, width=30,
             font=("Segoe UI", 9)
         )
         dir_entry.pack(side="left", padx=6)
+        dir_entry.bind("<FocusOut>", lambda _: self._save_dir())
+        dir_entry.bind("<Return>", lambda _: self._save_dir())
 
         browse_btn = ttk.Button(
             brand, text=LANG["browse"],
             command=self._browse_dir, width=6
         )
         browse_btn.pack(side="left", padx=(0, 16))
+        ttk.Button(brand, text="打开目录", command=self._open_download_dir).pack(side="left", padx=(0, 8))
 
         ttk.Label(
             brand, text=LANG["max_threads"],
@@ -115,6 +120,21 @@ class BlilBlilApp:
         if path:
             self.dir_var.set(path)
             self.config["download_dir"] = path
+
+    def _save_dir(self):
+        if self.dir_var.get().strip():
+            path = os.path.abspath(os.path.expanduser(self.dir_var.get().strip()))
+            self.dir_var.set(path)
+            self.config["download_dir"] = path
+
+    def _open_download_dir(self):
+        self._save_dir()
+        try:
+            path = self.dir_var.get()
+            os.makedirs(path, exist_ok=True)
+            os.startfile(path)
+        except OSError as error:
+            self.log(f"无法打开下载目录: {error}", "error")
 
     def _build_main_area(self):
         paned = ttk.PanedWindow(self.root, orient="horizontal")
@@ -194,8 +214,12 @@ class BlilBlilApp:
             self.log("下载已停止", "info")
             return
         if result.success:
-            import tkinter.messagebox as mb
-            mb.showinfo("成功", f"下载完成:\n{result.file_path}")
+            self.log(f"下载完成: {result.file_path}", "success")
+            if result.file_path and os.path.isfile(result.file_path):
+                try:
+                    subprocess.Popen(["explorer.exe", "/select,", os.path.abspath(result.file_path)])
+                except OSError as error:
+                    self.log(f"无法定位下载文件: {error}", "warning")
         else:
             import tkinter.messagebox as mb
             mb.showerror("错误", result.message)
