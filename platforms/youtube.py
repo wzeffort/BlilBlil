@@ -28,12 +28,12 @@ class YouTube(BaseDownloader):
         InstructionPanel(
             frame,
             steps=[
-                "打开 YouTube 视频或 Shorts，右键点击画面。",
-                "选择“Copy video URL”（复制视频链接），也可复制地址栏链接。",
+                "在浏览器中打开 YouTube 视频或 Shorts 播放页。",
+                "复制浏览器地址栏中的完整链接（如下图箭头所示）。",
                 "粘贴到上方后点击下载，自动选择画质并合并音视频。",
             ],
             image_name="YouTube下载说明.png",
-            max_image_width=200,
+            max_image_width=660,
         ).pack(fill="both", expand=True, pady=(8, 0))
         return frame
 

@@ -1746,6 +1746,52 @@ class DouyinDownloaderTests(unittest.TestCase):
             ),
         )
 
+    def test_dom_lookup_selects_video_linked_to_requested_work(self):
+        candidate = {
+            "src": "https://v26-web.douyinvod.com/target.mp4",
+            "ancestor_href": (
+                "https://www.douyin.com/video/7666163361146621227"
+            ),
+        }
+
+        self.assertEqual(
+            candidate["src"],
+            Douyin._select_target_dom_video(
+                [candidate], "7666163361146621227"
+            ),
+        )
+
+    def test_network_capture_selects_separate_video_and_audio_streams(self):
+        def entry(url, mime_type):
+            return {
+                "message": json.dumps(
+                    {
+                        "message": {
+                            "method": "Network.responseReceived",
+                            "params": {
+                                "response": {
+                                    "url": url,
+                                    "mimeType": mime_type,
+                                }
+                            },
+                        }
+                    }
+                )
+            }
+
+        video = "https://v26-web.douyinvod.com/x/media-video-hvc1/"
+        audio = "https://v26-web.douyinvod.com/x/media-audio-und-mp4a/"
+        entries = [
+            entry("https://example.com/ad.mp4", "video/mp4"),
+            entry(audio, "audio/mp4"),
+            entry(video, "video/mp4"),
+        ]
+
+        self.assertEqual(
+            (video, audio),
+            Douyin._network_media_urls(entries),
+        )
+
     def test_dom_lookup_rejects_untagged_page_ad(self):
         candidates = [
             {

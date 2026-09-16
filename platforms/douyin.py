@@ -9,7 +9,12 @@ from urllib.parse import parse_qs, unquote, urlparse
 import requests
 from core.downloader import BaseDownloader, DownloadResult
 from core.instruction_panel import InstructionPanel
-from core.utils import ensure_dir, sanitize_filename
+from core.utils import (
+    ensure_dir,
+    get_ffmpeg_path,
+    merge_audio_video,
+    sanitize_filename,
+)
 
 
 class Douyin(BaseDownloader):
@@ -114,13 +119,59 @@ class Douyin(BaseDownloader):
     def _select_target_dom_video(candidates, aweme_id):
         for candidate in candidates or []:
             src = candidate.get("src", "")
+            ancestor_href = candidate.get("ancestor_href", "")
             try:
                 video_ids = parse_qs(urlparse(src).query).get("__vid", [])
             except (TypeError, ValueError):
                 video_ids = []
-            if aweme_id in video_ids:
+            linked_aweme_id = Douyin._extract_id(ancestor_href)
+            if aweme_id in video_ids or linked_aweme_id == aweme_id:
                 return src
         return None
+
+    @staticmethod
+    def _network_media_urls(entries):
+        video_url = None
+        audio_url = None
+        for entry in entries or []:
+            try:
+                message = json.loads(entry["message"])["message"]
+                if message.get("method") != "Network.responseReceived":
+                    continue
+                response = message["params"]["response"]
+                url = response.get("url", "")
+                mime_type = response.get("mimeType", "").lower()
+            except (KeyError, TypeError, ValueError):
+                continue
+            if "douyinvod.com" not in url:
+                continue
+            if not audio_url and (
+                "/media-audio-" in url or mime_type.startswith("audio/")
+            ):
+                audio_url = url
+            elif not video_url and (
+                "/media-video-" in url or mime_type.startswith("video/")
+            ):
+                video_url = url
+            if video_url and audio_url:
+                break
+        return video_url, audio_url
+
+    @staticmethod
+    def _download_stream(url, path, headers):
+        response = requests.get(url, headers=headers, stream=True, timeout=120)
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "").lower()
+        if "text/html" in content_type or "application/json" in content_type:
+            raise ValueError(f"媒体地址返回了无效内容: {content_type}")
+        total = 0
+        with open(path, "wb") as file:
+            for chunk in response.iter_content(16384):
+                if chunk:
+                    file.write(chunk)
+                    total += len(chunk)
+        if total < 50000:
+            raise ValueError("目标媒体内容异常（小于 50KB）")
 
     def _on_download(self):
         url = self.url_var.get().strip()
@@ -156,36 +207,29 @@ class Douyin(BaseDownloader):
         except Exception as exc:
             return DownloadResult(False, f"无法解析抖音链接: {exc}")
 
-        self._set_status("尝试 yt-dlp...")
-        ytdlp_error = None
-        try:
-            from yt_dlp import YoutubeDL
-            ensure_dir(output_dir)
-            opts = {
-                "outtmpl": os.path.join(output_dir, "%(title)s.%(ext)s"),
-                "format": "best",
-                "nocheckcertificate": True,
-                "noplaylist": True,
-            }
-            with YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(video_url, download=True)
-                path = ydl.prepare_filename(info)
-                self._set_status("完成")
-                return DownloadResult(True, "下载完成", path)
-        except ImportError:
-            ytdlp_error = "未安装 yt-dlp"
-        except Exception as ye:
-            ytdlp_error = str(ye)
-
         self._set_status("启动浏览器...")
         driver = None
         try:
             from core.browser import cookies_to_header
 
-            driver = self.create_background_driver()
+            driver = self.create_background_driver(performance_logging=True)
+            driver.get("https://www.douyin.com/")
+            time.sleep(2)
+            driver.get_log("performance")
             driver.get(video_url)
             self._set_status("等待页面加载...")
-            time.sleep(6)
+            media_video_url = None
+            media_audio_url = None
+            deadline = time.monotonic() + 12
+            while time.monotonic() < deadline:
+                time.sleep(1)
+                network_video, network_audio = self._network_media_urls(
+                    driver.get_log("performance")
+                )
+                media_video_url = media_video_url or network_video
+                media_audio_url = media_audio_url or network_audio
+                if media_video_url and media_audio_url:
+                    break
 
             self._set_status("提取数据...")
             title = None
@@ -224,14 +268,50 @@ class Douyin(BaseDownloader):
 
             cookies = driver.get_cookies()
 
+            if media_video_url and media_audio_url:
+                self._set_status("下载并合并音视频...")
+                ck = cookies_to_header(cookies)
+                headers = {**self.REQUEST_HEADERS, "Cookie": ck}
+                ensure_dir(output_dir)
+                page_title = re.sub(
+                    r"\s*-\s*抖音\s*$", "", driver.title
+                ).strip()
+                fname = sanitize_filename(page_title) if page_title else f"douyin_{aid}"
+                path = os.path.join(output_dir, f"{fname}.mp4")
+                video_part = path + ".video.part"
+                audio_part = path + ".audio.part"
+                merged_part = path + ".merged.part.mp4"
+                try:
+                    self._download_stream(media_video_url, video_part, headers)
+                    self._download_stream(media_audio_url, audio_part, headers)
+                    ffmpeg = get_ffmpeg_path(kwargs.get("config"))
+                    if not ffmpeg:
+                        return DownloadResult(
+                            False,
+                            "已找到抖音音视频流，但未找到 FFmpeg，无法合并。",
+                        )
+                    if not merge_audio_video(
+                        audio_part, video_part, merged_part, ffmpeg
+                    ):
+                        return DownloadResult(False, "抖音音视频合并失败")
+                    os.replace(merged_part, path)
+                    self._set_status("完成")
+                    return DownloadResult(True, "下载完成", path)
+                finally:
+                    for temporary_path in (
+                        video_part,
+                        audio_part,
+                        merged_part,
+                    ):
+                        if os.path.exists(temporary_path):
+                            os.remove(temporary_path)
+
             if not video_src:
                 self._set_status("失败")
-                detail = f"\nyt-dlp: {ytdlp_error}" if ytdlp_error else ""
                 return DownloadResult(
                     False,
                     "未找到与作品 ID 匹配的视频，已拒绝下载页面广告。"
-                    "\n请确认浏览器已登录抖音。"
-                    f"{detail}",
+                    "\n请稍后重试，或确认该作品可在浏览器中正常播放。",
                 )
 
             self._set_status("下载中...")

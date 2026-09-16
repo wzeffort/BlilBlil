@@ -1,9 +1,11 @@
 import json
+import base64
 import os
 import re
 import subprocess
 import tempfile
 import time
+from urllib.parse import urlsplit
 import tkinter as tk
 from tkinter import ttk, messagebox
 import requests
@@ -11,7 +13,7 @@ from bs4 import BeautifulSoup
 from core.downloader import BaseDownloader, DownloadResult
 from core.browser import cookies_to_header
 from core.instruction_panel import InstructionPanel
-from core.iqiyi_routes import resolve_browser_manifest
+from core.iqiyi_routes import resolve_browser_manifest, missing_resource_seek
 from core.n_m3u8dl import build_n_m3u8dl_command, find_n_m3u8dl, run_n_m3u8dl
 from core.utils import (
     ensure_dir,
@@ -48,7 +50,8 @@ class IQiyi(BaseDownloader):
             steps=[
                 "在浏览器中打开想下载的爱奇艺视频播放页。",
                 "复制地址栏中的完整链接，粘贴到上方输入框，点击下载。",
-                "解析在后台静音进行；如需等待广告结束，请稍等，也可点击停止下载。",
+                "下载前需要等待广告播放结束，长广告可能需要约 2 分钟，请耐心等待。",
+                "程序会在后台静音等待，随后自动下载；等待期间请勿重复点击，可点击“停止下载”取消。",
             ],
             image_name="爱奇艺下载说明.png",
         ).pack(fill="both", expand=True, pady=(8, 0))
@@ -96,14 +99,45 @@ class IQiyi(BaseDownloader):
             urls = []
             target_ids = []
             media_url = None
-            for _ in range(20):
+            captured_manifest = None
+            manifests = {}
+            manifest_attempts = {}
+            seeks = {}
+            page_title = None
+            requested_tvid = None
+            started_at = time.monotonic()
+            for attempt in range(180):
                 self._raise_if_cancelled()
+                if attempt and attempt % 15 == 0:
+                    self._set_status(f"等待正片加载并匹配媒体文件（{int(time.monotonic() - started_at)} 秒，可停止下载）...")
                 time.sleep(1)
-                urls.extend(
-                    self._performance_urls(
-                        driver.get_log("performance")
-                    )
-                )
+                entries = driver.get_log("performance")
+                urls.extend(self._performance_urls(entries))
+                # Read the name of the requested work, not the generic page
+                # title or the next video selected by automatic playback.
+                for entry in entries if isinstance(entries, list) else []:
+                    try:
+                        event = json.loads(entry['message'])['message']
+                        if event.get('method') != 'Network.responseReceived':
+                            continue
+                        params = event['params']
+                        response_url = params['response']['url']
+                        if '.m3u8' in response_url:
+                            body = driver.execute_cdp_cmd('Network.getResponseBody', {'requestId': params['requestId']})
+                            raw = base64.b64decode(body['body']).decode('utf-8') if body.get('base64Encoded') else body['body']
+                            if raw.lstrip().startswith('#EXTM3U'):
+                                manifests[response_url] = raw
+                        if '/playervideoinfo?' not in params['response']['url']:
+                            continue
+                        body = driver.execute_cdp_cmd('Network.getResponseBody', {'requestId': params['requestId']})
+                        raw = base64.b64decode(body['body']) if body.get('base64Encoded') else body['body']
+                        info = json.loads(raw).get('data', {})
+                        if urlsplit(info.get('vu', '')).path == urlsplit(url).path:
+                            page_title = info.get('vn') or page_title
+                            if info.get('tvid'):
+                                requested_tvid = str(info['tvid'])
+                    except Exception:
+                        pass
                 for response_url in urls:
                     match = re.search(
                         r"/playervideoinfo\?[^#]*\bid=(\d+)",
@@ -114,20 +148,54 @@ class IQiyi(BaseDownloader):
                         and match.group(1) not in target_ids
                     ):
                         target_ids.append(match.group(1))
-                for target_tvid in target_ids:
+                for target_tvid in ([requested_tvid] if requested_tvid else target_ids[:1]):
                     media_url = self._select_target_media_url(
                         urls, target_tvid
                     )
                     if media_url:
                         break
-                if media_url and (
-                    ".m3u8" not in media_url.lower()
-                    or self._target_segment_urls(urls, target_tvid)
-                ):
+                if media_url and ".m3u8" not in media_url.lower():
                     break
+                if media_url:
+                    # Keep the browser alive until a playlist and its exact
+                    # signed CDN session match; the player can change quality.
+                    for candidate in dict.fromkeys(urls):
+                        if self._select_target_media_url([candidate], target_tvid) != candidate:
+                            continue
+                        if ".m3u8" not in candidate.lower():
+                            continue
+                        if candidate not in manifests:
+                            if manifest_attempts.get(candidate, 0) >= 2:
+                                continue
+                            manifest_attempts[candidate] = manifest_attempts.get(candidate, 0) + 1
+                            try:
+                                with requests.get(candidate, headers={
+                                    "Referer": url,
+                                    "Cookie": cookies_to_header(driver.get_cookies()),
+                                }, timeout=(4, 10)) as response:
+                                    response.raise_for_status()
+                                    if response.text.lstrip().startswith("#EXTM3U"):
+                                        manifests[candidate] = response.text
+                            except requests.RequestException:
+                                continue
+                        manifest = manifests.get(candidate, "")
+                        if resolve_browser_manifest(manifest, urls, target_tvid):
+                            media_url, captured_manifest = candidate, manifest
+                            break
+                        missing = missing_resource_seek(manifest, urls, target_tvid)
+                        if missing and time.monotonic() - seeks.get(missing[0], -1000) > 8:
+                            seeks[missing[0]] = time.monotonic()
+                            driver.execute_script(
+                                "for (const v of document.querySelectorAll('video')) {"
+                                "if (Number.isFinite(v.duration) && v.duration > arguments[0]) {"
+                                "v.currentTime = arguments[0]; v.play().catch(() => {}); break; }}",
+                                missing[1] + 0.05,
+                            )
+                    if captured_manifest:
+                        break
 
             title = sanitize_filename(
-                driver.title.split("-爱奇艺", 1)[0].strip()
+                page_title or driver.title.split("-爱奇艺", 1)[0].strip()
                 or "iqiyi_video"
             )
             cookie_header = cookies_to_header(driver.get_cookies())
@@ -163,6 +231,7 @@ class IQiyi(BaseDownloader):
             if ".m3u8" in media_url.lower():
                 output_path = self._download_hls(
                     media_url, urls, target_tvid, headers, output_path, config,
+                    manifest=captured_manifest,
                 )
                 return DownloadResult(
                     True, "下载完成", output_path
@@ -237,10 +306,11 @@ class IQiyi(BaseDownloader):
         if result.returncode:
             raise RuntimeError("爱奇艺下载文件无法解析或缺少音视频轨")
 
-    def _download_hls(self, media_url, observed_urls, target_tvid, headers, output_path, config):
-        with requests.get(media_url, headers=headers, timeout=(4, 10)) as response:
-            response.raise_for_status()
-            manifest = response.text
+    def _download_hls(self, media_url, observed_urls, target_tvid, headers, output_path, config, manifest=None):
+        if manifest is None:
+            with requests.get(media_url, headers=headers, timeout=(4, 10)) as response:
+                response.raise_for_status()
+                manifest = response.text
         resolved = resolve_browser_manifest(manifest, observed_urls, target_tvid)
         if resolved:
             executable = find_n_m3u8dl(config)
