@@ -22,25 +22,25 @@ class AppLayoutTests(unittest.TestCase):
         self.app.root.destroy()
         platforms._platforms.clear()
 
-    def test_progress_bar_is_visible_at_normal_window_size(self):
+    def test_task_progress_is_visible_at_normal_window_size(self):
         root_height = self.app.root.winfo_height()
         progress_bottom = (
-            self.app.progress.winfo_rooty()
+            self.app.tasks.winfo_rooty()
             - self.app.root.winfo_rooty()
-            + self.app.progress.winfo_height()
+            + self.app.tasks.winfo_height()
         )
 
-        self.assertTrue(self.app.progress.winfo_ismapped())
+        self.assertTrue(self.app.tasks.winfo_ismapped())
         self.assertLessEqual(progress_bottom, root_height)
 
-    def test_progress_bar_has_a_visible_label(self):
-        labels = [
-            child.cget("text")
-            for child in self.app.progress.master.winfo_children()
-            if child.winfo_class() == "TLabel"
-        ]
-
-        self.assertIn("下载进度", labels)
+    def test_each_platform_has_its_own_progress_and_status(self):
+        iqiyi, tencent = IQiyi(), Tencent()
+        self.app.update_download_task(iqiyi, active=True, status="下载中", progress="25.0%")
+        self.app.update_download_task(tencent, active=True, status="准备下载...", progress="—")
+        self.app.update_download_task(tencent, active=False, status="完成", progress="100.0%")
+        self.assertEqual("25.0%", self.app.tasks.set(str(id(iqiyi)), "progress"))
+        self.assertEqual("下载中", self.app.tasks.set(str(id(iqiyi)), "status"))
+        self.assertIn("active", self.app.tasks.item(str(id(iqiyi)), "tags"))
 
     def test_m3u8_download_tab_is_not_present(self):
         tab_titles = [

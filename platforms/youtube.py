@@ -58,7 +58,14 @@ class YouTube(BaseDownloader):
                 "nocheckcertificate": True,
                 "ffmpeg_location": os.path.abspath(ffmpeg),
                 "format": "bv+ba/b",
+                "merge_output_format": "mp4",
                 "noplaylist": True,
+                "keepvideo": False,
+                "keep_fragments": False,
+                "writeinfojson": False,
+                "writethumbnail": False,
+                "writesubtitles": False,
+                "writeautomaticsub": False,
             }
             opts.update(
                 self.get_yt_dlp_runtime_options(kwargs.get("config"))
@@ -67,7 +74,7 @@ class YouTube(BaseDownloader):
                 self._set_status("正在下载...")
                 info = ydl.extract_info(url, download=True)
                 self._raise_if_cancelled()
-                path = ydl.prepare_filename(info)
+                path = info.get("filepath") or ydl.prepare_filename(info)
                 if not os.path.isfile(path) or os.path.getsize(path) == 0:
                     return DownloadResult(False, "下载未生成有效文件，请查看下载日志。")
                 return DownloadResult(True, "下载完成", path)

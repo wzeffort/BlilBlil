@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import subprocess
 import time
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -145,17 +146,34 @@ class Douyin(BaseDownloader):
                 continue
             if "douyinvod.com" not in url:
                 continue
-            if not audio_url and (
-                "/media-audio-" in url or mime_type.startswith("audio/")
-            ):
-                audio_url = url
-            elif not video_url and (
+            if "/media-audio-" in url or mime_type.startswith("audio/"):
+                audio_url = audio_url or url
+                continue
+            if not video_url and (
                 "/media-video-" in url or mime_type.startswith("video/")
             ):
                 video_url = url
             if video_url and audio_url:
                 break
         return video_url, audio_url
+
+    @staticmethod
+    def _require_video(path, config=None):
+        ffmpeg = get_ffmpeg_path(config)
+        if not ffmpeg:
+            raise ValueError("未找到 FFmpeg，无法验证下载文件是否包含画面。")
+        result = subprocess.run(
+            [ffmpeg, "-v", "error", "-nostdin", "-i", path,
+             "-map", "0:v:0", "-t", "1", "-f", "null", "-"],
+            capture_output=True,
+            timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if result.returncode:
+            raise ValueError(
+                "下载内容没有可解码的视频轨道，不能作为视频下载成功。"
+                "请保留原链接以便排查。"
+            )
 
     @staticmethod
     def _download_stream(url, path, headers):
@@ -180,26 +198,6 @@ class Douyin(BaseDownloader):
             return
         output_dir = self.get_output_dir("douyin")
         self.start_download(url, output_dir)
-
-    def _set_status(self, text):
-        status_var = getattr(self, "status_var", None)
-        if status_var is None:
-            return
-
-        def update():
-            try:
-                status_var.set(text)
-            except Exception:
-                pass
-
-        app = getattr(self, "app", None)
-        try:
-            if app and getattr(app, "root", None):
-                app.root.after(0, update)
-            else:
-                update()
-        except Exception:
-            pass
 
     def download(self, url, output_dir, **kwargs):
         try:
@@ -283,6 +281,7 @@ class Douyin(BaseDownloader):
                 merged_part = path + ".merged.part.mp4"
                 try:
                     self._download_stream(media_video_url, video_part, headers)
+                    self._require_video(video_part, kwargs.get("config"))
                     self._download_stream(media_audio_url, audio_part, headers)
                     ffmpeg = get_ffmpeg_path(kwargs.get("config"))
                     if not ffmpeg:
@@ -294,6 +293,7 @@ class Douyin(BaseDownloader):
                         audio_part, video_part, merged_part, ffmpeg
                     ):
                         return DownloadResult(False, "抖音音视频合并失败")
+                    self._require_video(merged_part, kwargs.get("config"))
                     os.replace(merged_part, path)
                     self._set_status("完成")
                     return DownloadResult(True, "下载完成", path)
@@ -337,6 +337,7 @@ class Douyin(BaseDownloader):
                 os.remove(partial_path)
                 self._set_status("失败")
                 return DownloadResult(False, "目标视频内容异常（小于 50KB）")
+            self._require_video(partial_path, kwargs.get("config"))
             os.replace(partial_path, path)
             self._set_status("完成")
             return DownloadResult(True, "下载完成", path)

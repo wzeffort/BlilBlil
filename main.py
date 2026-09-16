@@ -14,15 +14,15 @@ TEXT_PRIMARY = "#212529"
 TEXT_SECONDARY = "#6c757d"
 
 LANG = {
-    "title": "BlilBlil — 多平台视频下载器",
-    "subtitle": "视频下载与播放工具",
+    "title": "BlilBlil — 并行下载兼容版 2026.09.16",
+    "subtitle": "多平台并行 · 自动兼容播放",
     "download_dir": "下载目录",
     "browse": "浏览",
     "progress": "进度",
     "log": "日志",
     "download_btn": "下载",
     "url_label": "视频地址",
-    "max_threads": "线程数",
+    "max_threads": "每任务线程",
     "platforms": "下载",
     "vip_player": "VIP 视频免费播放",
 }
@@ -153,11 +153,13 @@ class BlilBlilApp:
         self.notebook.pack(fill="both", expand=True)
 
         platforms = discover_platforms()
+        self.downloaders = []
         for cls in platforms:
             instance = cls()
             instance.app = self
             tab = instance.create_tab(self.notebook)
             self.notebook.add(tab, text=f"  {instance.icon} {instance.name}  ")
+            self.downloaders.append(instance)
 
         right_frame = ttk.Frame(paned)
         paned.add(right_frame, weight=2)
@@ -178,15 +180,21 @@ class BlilBlilApp:
         bottom = ttk.Frame(self.root)
         bottom.pack(side="bottom", fill="x", padx=16, pady=(0, 8))
 
-        progress_row = ttk.Frame(bottom)
-        progress_row.pack(fill="x", pady=(0, 6))
-        ttk.Label(
-            progress_row,
-            text="下载进度",
-            font=("Segoe UI", 9),
-        ).pack(side="left", padx=(0, 8))
-        self.progress = ttk.Progressbar(progress_row, mode="determinate")
-        self.progress.pack(side="left", fill="x", expand=True)
+        task_frame = ttk.LabelFrame(bottom, text="下载进度（各平台独立运行，切换标签不暂停）")
+        task_frame.pack(fill="x", pady=(0, 6))
+        self.tasks = ttk.Treeview(
+            task_frame, columns=("platform", "progress", "status"),
+            show="headings", height=3, selectmode="browse",
+        )
+        for column, title, width in (("platform", "平台", 100), ("progress", "下载进度", 100),
+                                     ("status", "当前状态", 600)):
+            self.tasks.heading(column, text=title)
+            self.tasks.column(column, width=width, minwidth=60, stretch=column == "status")
+        task_scroll = ttk.Scrollbar(task_frame, orient="vertical", command=self.tasks.yview)
+        self.tasks.configure(yscrollcommand=task_scroll.set)
+        task_scroll.pack(side="right", fill="y")
+        self.tasks.pack(fill="x", expand=True)
+        self.tasks.tag_configure("active", foreground="#2d8a4e")
 
         log_frame = ttk.LabelFrame(bottom, text=LANG["log"], padding=(4, 2))
         log_frame.pack(fill="both", expand=True)
@@ -206,15 +214,24 @@ class BlilBlilApp:
         scrollbar.pack(side="right", fill="y")
         self.log_text.pack(fill="both", expand=True)
 
-    def _on_download_done(self, result):
-        self.progress.stop()
-        self.progress["mode"] = "determinate"
-        self.progress["value"] = 100 if result.success else 0
+    def update_download_task(self, downloader, status=None, progress=None, active=None):
+        task_id = str(id(downloader))
+        if not self.tasks.exists(task_id):
+            self.tasks.insert("", "end", iid=task_id, values=(downloader.name, "—", "准备下载..."))
+        if status is not None:
+            self.tasks.set(task_id, "status", status)
+        if progress is not None:
+            self.tasks.set(task_id, "progress", progress)
+        if active is not None:
+            self.tasks.item(task_id, tags=("active",) if active else ())
+            if active:
+                self.tasks.see(task_id)
+
+    def _on_download_done(self, downloader, result):
         if result.cancelled:
-            self.log("下载已停止", "info")
             return
         if result.success:
-            self.log(f"下载完成: {result.file_path}", "success")
+            self.log(f"[{downloader.name}] 下载完成: {result.file_path}", "success")
             if result.file_path and os.path.isfile(result.file_path):
                 try:
                     subprocess.Popen(["explorer.exe", "/select,", os.path.abspath(result.file_path)])
@@ -222,7 +239,7 @@ class BlilBlilApp:
                     self.log(f"无法定位下载文件: {error}", "warning")
         else:
             import tkinter.messagebox as mb
-            mb.showerror("错误", result.message)
+            mb.showerror(f"{downloader.name}下载失败", result.message)
 
     def log(self, message: str, tag: str = "info"):
         self.log_text.config(state="normal")

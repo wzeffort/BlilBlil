@@ -213,7 +213,7 @@ class CoreDownloaderTests(unittest.TestCase):
         downloader = BrokenDownloader()
         downloader.app = types.SimpleNamespace(
             root=root,
-            _on_download_done=lambda result: callbacks.append(result),
+            _on_download_done=lambda owner, result: callbacks.append(result),
         )
 
         downloader._download_thread("https://example.com/video", "unused")
@@ -238,13 +238,13 @@ class CoreDownloaderTests(unittest.TestCase):
                 return DownloadResult(True, "ok")
 
         callbacks = []
-        progress = {"mode": "indeterminate", "value": 0}
+        update_task = Mock()
         downloader = ProgressDownloader()
         downloader.app = types.SimpleNamespace(
             root=types.SimpleNamespace(
                 after=lambda delay, callback: callbacks.append(callback)
             ),
-            progress=progress,
+            update_download_task=update_task,
             log=Mock(),
         )
         progress_hook = getattr(
@@ -265,8 +265,7 @@ class CoreDownloaderTests(unittest.TestCase):
         for callback in callbacks:
             callback()
 
-        self.assertEqual("determinate", progress["mode"])
-        self.assertEqual(50, progress["value"])
+        update_task.assert_called_once_with(downloader, progress="50.0%")
         downloader.app.log.assert_called()
 
 

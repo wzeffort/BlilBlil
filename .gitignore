@@ -9,3 +9,7 @@ __pycache__/
 *.wmv
 downloads/
 /ffmpeg/
+/.venv/
+/.setup/
+/logs/
+/tools/N_m3u8DL-RE/*.exe

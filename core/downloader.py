@@ -60,10 +60,9 @@ class BaseDownloader(abc.ABC):
         self._log(f"开始下载: {url}")
         app = getattr(self, "app", None)
         if app:
-            app.progress["mode"] = "indeterminate"
-            app.progress.start(15)
             if "config" not in kwargs:
-                kwargs["config"] = app.get_config()
+                config = app.get_config()
+                kwargs["config"] = dict(getattr(config, "data", config))
         thread = threading.Thread(
             target=self._download_thread,
             args=(url, output_dir),
@@ -130,6 +129,10 @@ class BaseDownloader(abc.ABC):
                 )
             if stop is not None:
                 stop.configure(state="normal" if active else "disabled")
+            app = getattr(self, "app", None)
+            update_task = getattr(app, "update_download_task", None)
+            if update_task is not None:
+                update_task(self, active=active, progress="—" if active else None)
 
         self._run_on_ui(update)
 
@@ -138,7 +141,7 @@ class BaseDownloader(abc.ABC):
         log_method = getattr(app, "log", None)
         if log_method is not None and message:
             self._run_on_ui(
-                lambda: log_method(str(message), tag)
+                lambda: log_method(f"[{self.name}] {message}", tag)
             )
 
     def create_status_label(self, parent):
@@ -164,25 +167,19 @@ class BaseDownloader(abc.ABC):
             if status_var is not None:
                 status_var.set(text)
             if log_method is not None:
-                log_method(text, "info")
+                log_method(f"[{self.name}] {text}", "info")
+            update_task = getattr(app, "update_download_task", None)
+            if update_task is not None:
+                update_task(self, status=text)
 
         self._run_on_ui(update)
 
     def _report_progress(self, percent):
         app = getattr(self, "app", None)
-        progress = getattr(app, "progress", None)
-        if progress is None:
+        update_task = getattr(app, "update_download_task", None)
+        if update_task is None:
             return
-
-        def update():
-            try:
-                progress.stop()
-            except AttributeError:
-                pass
-            progress["mode"] = "determinate"
-            progress["value"] = max(0, min(100, percent))
-
-        self._run_on_ui(update)
+        self._run_on_ui(lambda: update_task(self, progress=f"{max(0, min(100, percent)):.1f}%"))
 
     def _yt_dlp_progress_hook(self, data):
         self._raise_if_cancelled()
@@ -263,6 +260,16 @@ class BaseDownloader(abc.ABC):
     def _download_thread(self, url, output_dir, **kwargs):
         try:
             result = self.download(url, output_dir, **kwargs)
+            if result.success:
+                from core.media_compat import prepare_windows_video
+
+                if not result.file_path:
+                    raise ValueError("下载未返回视频文件，无法验证播放格式。")
+                result.file_path = prepare_windows_video(
+                    result.file_path, kwargs.get("config"),
+                    self._set_status, self._raise_if_cancelled,
+                )
+                result.message = "下载完成，已通过视频格式检查（MP4 / H.264）。"
         except DownloadCancelled:
             result = DownloadResult(
                 False, "下载已停止", cancelled=True
@@ -275,6 +282,8 @@ class BaseDownloader(abc.ABC):
             self._log(result.message, "warning")
         else:
             self._set_status("完成" if result.success else "失败")
+            if result.success:
+                self._report_progress(100)
             self._log(
                 result.message,
                 "success" if result.success else "error",
@@ -282,6 +291,6 @@ class BaseDownloader(abc.ABC):
         app = getattr(self, "app", None)
         if app:
             try:
-                app.root.after(250, lambda r=result: app._on_download_done(r))
+                app.root.after(0, lambda r=result: app._on_download_done(self, r))
             except Exception:
                 pass
