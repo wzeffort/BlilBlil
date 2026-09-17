@@ -5,6 +5,7 @@
 ---
 
 ## 中文
+<img width="1102" height="712" alt="image" src="https://github.com/user-attachments/assets/0ad75291-8187-4337-b47a-7c6a8e10ccf3" />
 
 BlilBlil 是一个多平台视频下载工具，支持主流视频网站的非 VIP 普通视频下载。复制播放页链接即可。
 
