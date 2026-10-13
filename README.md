@@ -22,6 +22,8 @@ BlilBlil 是一个多平台视频下载工具，支持主流视频网站的非 V
 
 粘贴视频链接，选择线路后点击“解析播放”。默认使用虾米解析，也可切换备用线路。输入片名可使用“官网打开 / 搜索”。第三方线路能否播放以实际结果为准。
 
+> **功能边界：**各平台下载标签仅支持非 VIP 普通视频；VIP 区域只负责跳转第三方线路进行在线播放，不提供 VIP 视频下载。可用清晰度由片源、账号权益和第三方线路共同决定，无法保证提供 1080p 或更高画质。
+
 ### 安装
 
 ```bash
@@ -77,6 +79,8 @@ BlilBlil is a multi-platform video downloader supporting mainstream video sites.
 ### Video playback
 
 Paste a video URL and choose a route to play. XMFLV is the default, with an alternative route available. Use the official-site button to open the original page or search Tencent Video by title. Playback availability depends on the provider. Downloads support non-VIP videos only.
+
+> **Scope:** Platform download tabs support non-VIP videos only. The VIP area opens third-party routes for online playback and does not download VIP content. Available quality depends on the source, account entitlements, and route provider, so 1080p or higher quality is not guaranteed.
 
 ### Install
 
